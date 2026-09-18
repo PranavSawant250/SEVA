@@ -1,0 +1,32 @@
+# Node modules
+node_modules/
+
+# Environment and secrets
+.env
+*.env*
+*.env.local
+
+# Credentials & Private OAuth tokens
+credentials/
+backend/credentials/
+*.json
+!package.json
+!package-lock.json
+!backend/package.json
+!backend/package-lock.json
+
+# SQLite Database files (Local privacy data)
+*.db
+seva.db
+backend/*.db
+backend/seva.db
+
+# Study Notes & Details folders (Permanently gitignored as per project rule)
+study-notes/
+backend/study-notes/
+details/
+backend/details/
+
+# Logs & temporary files
+*.log
+npm-debug.log*

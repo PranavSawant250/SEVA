@@ -1,0 +1,24 @@
+# Node modules
+node_modules/
+
+# Environment files
+.env
+*.env*
+
+# Credentials & OAuth Tokens
+credentials/
+*.json
+!package.json
+!package-lock.json
+
+# SQLite Database files
+*.db
+seva.db
+
+# Study Notes & Details folders (Permanently gitignored as per project rule)
+study-notes/
+details/
+
+# Logs & temp files
+*.log
+npm-debug.log*
