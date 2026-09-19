@@ -3,6 +3,8 @@ const router = express.Router();
 const gmailService = require('../services/gmailService');
 const aiService = require('../services/aiService');
 const db = require('../database/db');
+const { getTodayDate } = require('../utils/dateUtils');
+
 
 // ─────────────────────────────────────────────────────────────
 // AUTH ROUTES  (mounted at /api/auth)
@@ -158,7 +160,7 @@ router.post('/accept/:id', (req, res) => {
     : (email.subject && email.subject.trim() ? email.subject.trim() : 'Email task');
 
   // 3. Use the email's own date for the task; fall back to today's date
-  const today = new Date().toISOString().split('T')[0];
+  const today = getTodayDate();
   const taskDate = (email.date && email.date.trim()) ? email.date.trim() : today;
 
   // 4. Normalize priority

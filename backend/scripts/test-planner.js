@@ -32,10 +32,23 @@ function extractArrayJsonString(rawText) {
   return null;
 }
 
-function validatePlanItem(item) {
+function validatePlanItem(item, allowedTaskNames = null) {
   if (!item || typeof item !== 'object') return null;
   if (!item.task || typeof item.task !== 'string' || !item.task.trim()) return null;
   const task = item.task.trim();
+
+  if (allowedTaskNames && Array.isArray(allowedTaskNames) && allowedTaskNames.length > 0) {
+    const normTask = task.toLowerCase();
+    const isAllowed = allowedTaskNames.some(allowed => {
+      const normAllowed = allowed.toLowerCase().trim();
+      return normTask === normAllowed || normTask.includes(normAllowed) || normAllowed.includes(normTask);
+    });
+    if (!isAllowed) {
+      console.warn(`⚠️  Dropping hallucinated task "${task}" — not found in allowed task list.`);
+      return null;
+    }
+  }
+
   const rawPriority = typeof item.priority === 'string' ? item.priority.toLowerCase().trim() : '';
   const priority = ALLOWED_PRIORITIES.includes(rawPriority) ? rawPriority : 'medium';
   let duration = parseInt(item.duration, 10);
@@ -137,7 +150,8 @@ Rules:
         console.warn('⚠️  Parsed value is not an array — using fallback.');
         usedFallback = true;
       } else {
-        const validated = parsed.map(validatePlanItem).filter(i => i !== null);
+        const allowedTaskNames = tasks.map(t => t.name);
+        const validated = parsed.map(item => validatePlanItem(item, allowedTaskNames)).filter(i => i !== null);
         if (validated.length === 0) {
           console.warn('⚠️  All items dropped after validation — using fallback.');
           usedFallback = true;

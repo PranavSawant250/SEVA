@@ -1,11 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../database/db');
+const { getTodayDate } = require('../utils/dateUtils');
 
-// Helper: get today's date as YYYY-MM-DD (server local date)
-function getTodayDate() {
-  return new Date().toISOString().split('T')[0];
-}
 
 // ─────────────────────────────────────────────────────────────
 // GET /api/tasks

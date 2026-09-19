@@ -1,5 +1,6 @@
 const ollama = require('ollama').default || require('ollama');
 const db = require('../database/db');
+const { getTodayDate, getTodayDayOfWeek } = require('../utils/dateUtils');
 
 // Use the same model constant pattern as aiService.js
 const PREFERRED_MODEL = process.env.OLLAMA_MODEL || 'phi3.5';
@@ -53,12 +54,13 @@ function extractArrayJsonString(rawText) {
  *
  * Rules (from spec):
  *  - task: non-empty string — DROP item entirely if missing/empty
+ *  - task provenance: must match an allowed task name from active task list
  *  - priority: must be in ALLOWED_PRIORITIES — coerce to 'medium' if invalid
  *  - duration: positive number — default to 30 if missing or invalid
  *  - time: keep if non-empty string, else null
  *  - source: keep if non-empty string, else 'manual'
  */
-function validatePlanItem(item) {
+function validatePlanItem(item, allowedTaskNames = null) {
   if (!item || typeof item !== 'object') return null;
 
   // task is mandatory — drop if missing or empty
@@ -67,6 +69,19 @@ function validatePlanItem(item) {
   }
 
   const task = item.task.trim();
+
+  // Task provenance check: drop AI-hallucinated tasks not present in allowedTaskNames
+  if (allowedTaskNames && Array.isArray(allowedTaskNames) && allowedTaskNames.length > 0) {
+    const normTask = task.toLowerCase();
+    const isAllowed = allowedTaskNames.some(allowed => {
+      const normAllowed = allowed.toLowerCase().trim();
+      return normTask === normAllowed || normTask.includes(normAllowed) || normAllowed.includes(normTask);
+    });
+    if (!isAllowed) {
+      console.warn(`⚠️ Dropping hallucinated task "${task}" — not found in active task whitelist.`);
+      return null;
+    }
+  }
 
   // priority: normalize case, coerce unknown values to 'medium'
   const rawPriority = typeof item.priority === 'string' ? item.priority.toLowerCase().trim() : '';
@@ -96,7 +111,7 @@ function validatePlanItem(item) {
  * Returns { items: [...], usedFallback: false } on success,
  * or { items: null, usedFallback: true } if parsing/extraction fails.
  */
-function parseAndValidatePlanArray(rawResponse) {
+function parseAndValidatePlanArray(rawResponse, allowedTaskNames = null) {
   const extracted = extractArrayJsonString(rawResponse);
   if (!extracted) {
     console.warn('⚠️ Could not extract JSON array from AI response (no [ ] brackets found).');
@@ -116,11 +131,11 @@ function parseAndValidatePlanArray(rawResponse) {
     return { items: null, usedFallback: true };
   }
 
-  // Validate every item — drop nulls (items with missing task name)
-  const validItems = parsed.map(validatePlanItem).filter(item => item !== null);
+  // Validate every item — drop nulls (items with missing or hallucinated task name)
+  const validItems = parsed.map(item => validatePlanItem(item, allowedTaskNames)).filter(item => item !== null);
 
   if (validItems.length === 0) {
-    console.warn('⚠️ All items dropped after validation — empty plan from AI.');
+    console.warn('⚠️ All items dropped after validation — empty/hallucinated plan from AI.');
     return { items: null, usedFallback: true };
   }
 
@@ -201,8 +216,8 @@ function buildFallbackPlan(tasks) {
  * @returns {Array} Plan array of { time, task, priority, duration, source }
  */
 async function generateDayPlan() {
-  const today = new Date().toISOString().split('T')[0];
-  const todayDayOfWeek = new Date().toLocaleDateString('en-US', { weekday: 'long' }); // e.g. "Saturday"
+  const today = getTodayDate();
+  const todayDayOfWeek = getTodayDayOfWeek();
 
   console.log(`\n🗓️  generateDayPlan() called for date: ${today} (${todayDayOfWeek})`);
 
@@ -294,7 +309,8 @@ Rules:
   }
 
   // ── 6. Parse + validate AI response ────────────────────────
-  const { items, usedFallback } = parseAndValidatePlanArray(rawResponse);
+  const allowedTaskNames = tasks.map(t => t.name);
+  const { items, usedFallback } = parseAndValidatePlanArray(rawResponse, allowedTaskNames);
 
   let finalPlan;
   if (usedFallback || !items) {
@@ -322,7 +338,7 @@ Rules:
  * @returns {Array} Updated plan array covering remaining hours only
  */
 async function replan(surpriseEvent) {
-  const today = new Date().toISOString().split('T')[0];
+  const today = getTodayDate();
 
   // Calculate remaining hours server-side (current time → 11:59 PM)
   const now = new Date();
@@ -404,7 +420,8 @@ Rules:
   }
 
   // ── 4. Parse + validate (reusing shared helpers) ────────────
-  const { items, usedFallback } = parseAndValidatePlanArray(rawResponse);
+  const allowedTaskNames = incompleteTasks.map(t => t.name);
+  const { items, usedFallback } = parseAndValidatePlanArray(rawResponse, allowedTaskNames);
 
   let finalPlan;
   if (usedFallback || !items) {

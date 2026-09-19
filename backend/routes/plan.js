@@ -2,11 +2,8 @@ const express = require('express');
 const router = express.Router();
 const db = require('../database/db');
 const { generateDayPlan, replan } = require('../services/plannerService');
+const { getTodayDate } = require('../utils/dateUtils');
 
-// Helper: today's date as YYYY-MM-DD
-function getTodayDate() {
-  return new Date().toISOString().split('T')[0];
-}
 
 // ─────────────────────────────────────────────────────────────
 // GET /api/plan/generate

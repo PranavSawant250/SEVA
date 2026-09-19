@@ -4,7 +4,9 @@ const path = require('path');
 require('dotenv').config();
 
 const db = require('../database/db');
+const { getTodayDate } = require('../utils/dateUtils');
 const TOKEN_PATH = path.join(__dirname, '..', 'credentials', 'token.json');
+
 
 // Get OAuth2 client instance using environment variables
 function createOAuth2Client() {
@@ -186,11 +188,11 @@ async function fetchRecentEmails() {
       const bodyPreview = getBodyPreview(msgData.data.payload, msgData.data.snippet);
 
       // Parse email date into YYYY-MM-DD
-      let emailDateStr = new Date().toISOString().split('T')[0];
+      let emailDateStr = getTodayDate();
       if (dateHeader && dateHeader.value) {
         const parsedDate = new Date(dateHeader.value);
         if (!isNaN(parsedDate.getTime())) {
-          emailDateStr = parsedDate.toISOString().split('T')[0];
+          emailDateStr = getTodayDate(parsedDate);
         }
       }
 
