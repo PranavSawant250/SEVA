@@ -70,7 +70,7 @@ function validatePlanItem(item, allowedTaskNames = null) {
 
   const task = item.task.trim();
 
-  // Task provenance check: drop AI-hallucinated tasks not present in allowedTaskNames
+  // Task provenance check: drop AI-hallucinated tasks not present in allowedTaskNames (STRICT MATCH)
   if (allowedTaskNames && Array.isArray(allowedTaskNames) && allowedTaskNames.length > 0) {
     const normTask = task.toLowerCase();
     const isAllowed = allowedTaskNames.some(allowed => {
@@ -327,6 +327,26 @@ Rules:
   return finalPlan;
 }
 
+/**
+ * Helper to construct a guaranteed slot object for a surprise event.
+ * Extracts time if present in string (e.g. "2 PM"), defaults priority to 'high' and source to 'surprise_event'.
+ */
+function createSurpriseEventSlot(surpriseEvent) {
+  let extractedTime = null;
+  const timeMatch = surpriseEvent.match(/\b(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm))\b/i);
+  if (timeMatch) {
+    extractedTime = timeMatch[1].toUpperCase();
+  }
+
+  return {
+    time: extractedTime,
+    task: surpriseEvent.trim(),
+    priority: 'high',
+    duration: 60,
+    source: 'surprise_event'
+  };
+}
+
 // ─────────────────────────────────────────────────────────────
 // STEP 2 — replan()
 // ─────────────────────────────────────────────────────────────
@@ -364,8 +384,8 @@ async function replan(surpriseEvent) {
   console.log(`   └─ ${incompleteTasks.length} incomplete task(s) to replan.`);
 
   if (incompleteTasks.length === 0) {
-    console.log('ℹ️  No incomplete tasks — nothing to replan. Returning empty plan.');
-    const emptyPlan = [];
+    console.log('ℹ️  No incomplete tasks — returning plan with surprise event only.');
+    const emptyPlan = [createSurpriseEventSlot(surpriseEvent)];
     savePlanToDb(today, emptyPlan);
     return emptyPlan;
   }
@@ -415,26 +435,31 @@ Rules:
     console.error(`❌ Ollama call failed: ${ollamaErr.message}`);
     console.warn('⚠️  Using fallback replan (task ordering by priority).');
     const fallbackPlan = buildFallbackPlan(incompleteTasks);
-    savePlanToDb(today, fallbackPlan);
-    return fallbackPlan;
+    const mergedFallback = [createSurpriseEventSlot(surpriseEvent), ...fallbackPlan];
+    savePlanToDb(today, mergedFallback);
+    return mergedFallback;
   }
 
-  // ── 4. Parse + validate (reusing shared helpers) ────────────
+  // ── 4. Parse + validate (strict match against real incomplete tasks ONLY) ────────────
   const allowedTaskNames = incompleteTasks.map(t => t.name);
   const { items, usedFallback } = parseAndValidatePlanArray(rawResponse, allowedTaskNames);
 
-  let finalPlan;
+  let taskSlots;
   if (usedFallback || !items) {
     console.warn('⚠️  Replan parsing/validation failed. Using fallback plan (priority ordering).');
-    finalPlan = buildFallbackPlan(incompleteTasks);
+    taskSlots = buildFallbackPlan(incompleteTasks);
   } else {
-    finalPlan = items;
-    console.log(`✅ Replan generated with ${finalPlan.length} valid slot(s).`);
+    taskSlots = items;
+    console.log(`✅ Replan generated with ${taskSlots.length} valid task slot(s).`);
   }
 
-  // ── 5. UPDATE today's existing plan row (never INSERT for replans) ──
+  // ── 5. Guaranteed server-side injection of the surprise event slot ──
+  const surpriseSlot = createSurpriseEventSlot(surpriseEvent);
+  const finalPlan = [surpriseSlot, ...taskSlots];
+
+  // ── 6. UPDATE today's existing plan row (never INSERT for replans) ──
   savePlanToDb(today, finalPlan);
-  console.log(`🔄 day_plans updated for ${today} with replanned schedule.`);
+  console.log(`🔄 day_plans updated for ${today} with replanned schedule (${finalPlan.length} total slot(s)).`);
 
   return finalPlan;
 }
