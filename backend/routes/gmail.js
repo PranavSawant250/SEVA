@@ -38,13 +38,9 @@ router.get('/callback', async (req, res) => {
     await gmailService.handleAuthCallback(code);
     console.log('✅ Google OAuth Login Successful!');
 
-    res.send(`
-      <div style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-        <h1 style="color: #2e7d32;">✅ Google OAuth Login Successful!</h1>
-        <p>Your Gmail refresh token has been saved securely to <code>credentials/token.json</code>.</p>
-        <p>You can now trigger email fetch at <a href="/api/emails/fetch">/api/emails/fetch</a> or view results at <a href="/api/emails/today">/api/emails/today</a>.</p>
-      </div>
-    `);
+    // token.json is fully written by handleAuthCallback() above (awaited).
+    // Only redirect AFTER the await resolves — order is guaranteed.
+    res.redirect('http://localhost:3000/dashboard');
   } catch (err) {
     console.error('Error exchanging OAuth code for tokens:', err);
     res.status(500).send(`OAuth Token Exchange Failed: ${err.message}`);

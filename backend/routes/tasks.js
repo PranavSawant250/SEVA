@@ -3,7 +3,6 @@ const router = express.Router();
 const db = require('../database/db');
 const { getTodayDate } = require('../utils/dateUtils');
 
-
 // ─────────────────────────────────────────────────────────────
 // GET /api/tasks
 // Returns all tasks where date = today (manual + email-derived)
@@ -32,7 +31,7 @@ router.get('/', (req, res) => {
     });
   } catch (err) {
     console.error('❌ Error fetching tasks:', err.message);
-    res.status(500).json({ error: 'Failed to fetch tasks', details: err.message });
+    res.status(500).json({ success: false, error: 'Failed to fetch tasks', details: err.message });
   }
 });
 
@@ -48,7 +47,15 @@ router.post('/', (req, res) => {
 
     // Validate required field
     if (!name || typeof name !== 'string' || !name.trim()) {
-      return res.status(400).json({ error: 'Task name is required and must be a non-empty string.' });
+      return res.status(400).json({ success: false, error: 'Task name is required and must be a non-empty string.' });
+    }
+
+    // Max-length validation: prevent absurdly long task names (> 300 chars)
+    if (name.trim().length > 300) {
+      return res.status(400).json({
+        success: false,
+        error: `Task name is too long (${name.trim().length} chars). Maximum allowed is 300 characters.`
+      });
     }
 
     // Normalize date: if "today" (or missing), use today's real date
@@ -93,47 +100,47 @@ router.post('/', (req, res) => {
     });
   } catch (err) {
     console.error('❌ Error adding task:', err.message);
-    res.status(500).json({ error: 'Failed to add task', details: err.message });
+    res.status(500).json({ success: false, error: 'Failed to add task', details: err.message });
   }
 });
 
 // ─────────────────────────────────────────────────────────────
 // PATCH /api/tasks/:id/complete
-// Marks a single task as completed (completed = 1)
+// Body: { completed: 0 | 1 } — supports toggling both directions.
+// If no body provided, defaults to marking complete (completed = 1).
 // ─────────────────────────────────────────────────────────────
 router.patch('/:id/complete', (req, res) => {
   try {
     const taskId = parseInt(req.params.id, 10);
 
     if (isNaN(taskId)) {
-      return res.status(400).json({ error: 'Invalid task id — must be an integer.' });
+      return res.status(400).json({ success: false, error: 'Invalid task id — must be an integer.' });
     }
 
     // Confirm the task exists first
     const task = db.prepare(`SELECT id, name, completed FROM tasks WHERE id = ?`).get(taskId);
 
     if (!task) {
-      return res.status(404).json({ error: `No task found with id ${taskId}` });
+      return res.status(404).json({ success: false, error: `No task found with id ${taskId}` });
     }
 
-    if (task.completed === 1) {
-      return res.status(409).json({
-        error: 'Already completed',
-        message: `Task ${taskId} ("${task.name}") is already marked as completed.`
-      });
-    }
+    // Support toggle: body may include completed: 0 or 1. Default to 1 (complete) if not provided.
+    const requestedStatus = (req.body && (req.body.completed === 0 || req.body.completed === 1))
+      ? req.body.completed
+      : 1;
 
-    db.prepare(`UPDATE tasks SET completed = 1 WHERE id = ?`).run(taskId);
-    console.log(`✅ Task id=${taskId} ("${task.name}") marked as completed.`);
+    db.prepare(`UPDATE tasks SET completed = ? WHERE id = ?`).run(requestedStatus, taskId);
+    const statusLabel = requestedStatus === 1 ? 'completed' : 'incomplete';
+    console.log(`✅ Task id=${taskId} ("${task.name}") marked as ${statusLabel}.`);
 
     res.json({
       success: true,
-      message: `Task ${taskId} marked as completed.`,
-      task: { id: taskId, name: task.name, completed: 1 }
+      message: `Task ${taskId} marked as ${statusLabel}.`,
+      task: { id: taskId, name: task.name, completed: requestedStatus }
     });
   } catch (err) {
     console.error('❌ Error completing task:', err.message);
-    res.status(500).json({ error: 'Failed to mark task as completed', details: err.message });
+    res.status(500).json({ success: false, error: 'Failed to mark task as completed', details: err.message });
   }
 });
 
@@ -146,13 +153,13 @@ router.delete('/:id', (req, res) => {
     const taskId = parseInt(req.params.id, 10);
 
     if (isNaN(taskId)) {
-      return res.status(400).json({ error: 'Invalid task id — must be an integer.' });
+      return res.status(400).json({ success: false, error: 'Invalid task id — must be an integer.' });
     }
 
     const task = db.prepare(`SELECT id, name FROM tasks WHERE id = ?`).get(taskId);
 
     if (!task) {
-      return res.status(404).json({ error: `No task found with id ${taskId}` });
+      return res.status(404).json({ success: false, error: `No task found with id ${taskId}` });
     }
 
     db.prepare(`DELETE FROM tasks WHERE id = ?`).run(taskId);
@@ -165,7 +172,7 @@ router.delete('/:id', (req, res) => {
     });
   } catch (err) {
     console.error('❌ Error deleting task:', err.message);
-    res.status(500).json({ error: 'Failed to delete task', details: err.message });
+    res.status(500).json({ success: false, error: 'Failed to delete task', details: err.message });
   }
 });
 
