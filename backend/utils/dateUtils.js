@@ -32,7 +32,40 @@ function getTodayDayOfWeek(dateObj = new Date()) {
   return d.toLocaleDateString('en-US', { weekday: 'long' });
 }
 
+/**
+ * Returns yesterday's date formatted as YYYY-MM-DD in local server timezone.
+ *
+ * @param {Date} [dateObj=new Date()] Optional Date object
+ * @returns {string} Date formatted as "YYYY-MM-DD"
+ */
+function getYesterdayDate(dateObj = new Date()) {
+  const d = dateObj instanceof Date ? dateObj : new Date(dateObj);
+  d.setDate(d.getDate() - 1);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * Returns tomorrow's date formatted as YYYY-MM-DD in local server timezone.
+ *
+ * @param {Date} [dateObj=new Date()] Optional Date object
+ * @returns {string} Date formatted as "YYYY-MM-DD"
+ */
+function getTomorrowDate(dateObj = new Date()) {
+  const d = dateObj instanceof Date ? dateObj : new Date(dateObj);
+  d.setDate(d.getDate() + 1);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 module.exports = {
   getTodayDate,
-  getTodayDayOfWeek
+  getTodayDayOfWeek,
+  getYesterdayDate,
+  getTomorrowDate
 };
+

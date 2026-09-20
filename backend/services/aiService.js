@@ -1,5 +1,7 @@
 const ollama = require('ollama').default || require('ollama');
 const db = require('../database/db');
+const { getTodayDate } = require('../utils/dateUtils');
+
 
 // Preferred model configuration (Standardized on phi3.5 after 5/5 precision test)
 const PREFERRED_MODEL = process.env.OLLAMA_MODEL || 'phi3.5';
@@ -235,8 +237,115 @@ async function processUnanalyzedEmails() {
   return count;
 }
 
+/**
+ * chatWithSeva(userMessage, currentInsertedMsgId = null)
+ *
+ * Conversational chat helper with SEVA AI.
+ * Context-aware: ingests today's day plan, pending tasks, and recent 10 chat messages.
+ *
+ * @param {string} userMessage User prompt text
+ * @param {number|null} currentInsertedMsgId Optional ID of user message just inserted into chat_history to exclude from history fetch
+ * @returns {string} SEVA's response text (plain text)
+ */
+async function chatWithSeva(userMessage, currentInsertedMsgId = null) {
+  const today = getTodayDate();
+
+  try {
+    // 1. Fetch recent chat history for today (up to last 10 turns, excluding current turn if provided)
+    let historyRows;
+    if (currentInsertedMsgId) {
+      historyRows = db.prepare(`
+        SELECT role, message
+        FROM (
+          SELECT id, role, message
+          FROM chat_history
+          WHERE date = ? AND id != ?
+          ORDER BY id DESC
+          LIMIT 10
+        )
+        ORDER BY id ASC
+      `).all(today, currentInsertedMsgId);
+    } else {
+      historyRows = db.prepare(`
+        SELECT role, message
+        FROM (
+          SELECT id, role, message
+          FROM chat_history
+          WHERE date = ?
+          ORDER BY id DESC
+          LIMIT 10
+        )
+        ORDER BY id ASC
+      `).all(today);
+    }
+
+    // 2. Fetch today's plan from day_plans
+    const planRow = db.prepare(`SELECT plan_json FROM day_plans WHERE date = ?`).get(today);
+    let planContext = 'No day plan generated yet for today.';
+    if (planRow && planRow.plan_json) {
+      try {
+        const parsedPlan = JSON.parse(planRow.plan_json);
+        if (Array.isArray(parsedPlan) && parsedPlan.length > 0) {
+          planContext = parsedPlan
+            .map(slot => `[${slot.time || 'flexible'}] ${slot.task} (${slot.priority || 'medium'}, ${slot.duration || 30}m)`)
+            .join('; ');
+        }
+      } catch (e) {
+        planContext = planRow.plan_json;
+      }
+    }
+
+    // 3. Fetch today's pending tasks (incomplete)
+    const pendingTasks = db.prepare(`
+      SELECT name, priority, time_slot
+      FROM tasks
+      WHERE date = ? AND completed = 0
+      ORDER BY CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END
+    `).all(today);
+
+    const pendingTasksContext = pendingTasks.length > 0
+      ? pendingTasks.map(t => `"${t.name}" (${t.priority}${t.time_slot ? `, ${t.time_slot}` : ''})`).join(', ')
+      : 'None (all tasks completed or no tasks scheduled)';
+
+    // 4. Construct System Prompt
+    const systemPrompt = `You are SEVA, a warm, intelligent, and helpful personal planning assistant.
+
+Today's Date: ${today}
+Today's Current Plan: ${planContext}
+Pending Incomplete Tasks: ${pendingTasksContext}
+
+Instructions:
+- Respond naturally and conversationally.
+- Keep responses concise (2-4 sentences) unless the user explicitly requests details.
+- You may mix Hindi and English (Hinglish) naturally if the user does.
+- Strictly ground your responses in the context provided above. Do NOT invent meetings, deadlines, or plan slots that do not exist.
+- If asked about information not present in context, state honestly that you do not have that information.`;
+
+    // 5. Format message payload for Ollama chat
+    const formattedMessages = [
+      { role: 'system', content: systemPrompt },
+      ...historyRows.map(r => ({ role: r.role === 'assistant' ? 'assistant' : 'user', content: r.message })),
+      { role: 'user', content: userMessage }
+    ];
+
+    console.log(`🤖 Calling Ollama chatWithSeva() with model "${PREFERRED_MODEL}"...`);
+    const response = await ollama.chat({
+      model: PREFERRED_MODEL,
+      messages: formattedMessages
+    });
+
+    const reply = response.message ? response.message.content.trim() : '';
+    return reply || "I'm here to help! What would you like to know about your day?";
+  } catch (err) {
+    console.error('❌ Error in chatWithSeva():', err.message);
+    return "Sorry, I'm having trouble responding right now. Please try again in a moment.";
+  }
+}
+
 module.exports = {
   PREFERRED_MODEL,
   analyzeEmail,
-  processUnanalyzedEmails
+  processUnanalyzedEmails,
+  chatWithSeva
 };
+

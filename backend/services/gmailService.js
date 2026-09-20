@@ -37,7 +37,7 @@ function getAuthUrl() {
 async function handleAuthCallback(code) {
   const oauth2Client = createOAuth2Client();
   const { tokens } = await oauth2Client.getToken(code);
-  
+
   // If token.json already exists and new tokens don't include refresh_token, preserve existing refresh_token
   if (fs.existsSync(TOKEN_PATH)) {
     try {
