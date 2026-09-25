@@ -56,6 +56,7 @@ router.get('/fetch', async (req, res) => {
   try {
     if (!gmailService.isLoggedIn()) {
       return res.status(401).json({
+        success: false,
         error: 'Not authenticated',
         message: 'Please complete OAuth login first by visiting /api/auth/gmail in your browser.'
       });
