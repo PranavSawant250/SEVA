@@ -319,6 +319,7 @@ Instructions:
 - Keep responses concise (2-4 sentences) unless the user explicitly requests details.
 - You may mix Hindi and English (Hinglish) naturally if the user does.
 - Strictly ground your responses in the context provided above. Do NOT invent meetings, deadlines, or plan slots that do not exist.
+- Never confirm details (times, dates, event names) that the user states unless they match your context exactly. If a user mentions a specific time, date, or detail that does NOT match what's in your provided context (for example, asking about a 5 PM meeting when your schedule has an event at 3:30 PM or no event at 5 PM), explicitly correct them with the ACTUAL scheduled time or state that no event exists at their stated time. Do NOT adopt their false premise or move events to match their question.
 - If asked about information not present in context, state honestly that you do not have that information.`;
 
     // 5. Format message payload for Ollama chat
@@ -331,7 +332,8 @@ Instructions:
     console.log(`🤖 Calling Ollama chatWithSeva() with model "${PREFERRED_MODEL}"...`);
     const response = await ollama.chat({
       model: PREFERRED_MODEL,
-      messages: formattedMessages
+      messages: formattedMessages,
+      options: { temperature: 0.3 }
     });
 
     const reply = response.message ? response.message.content.trim() : '';
