@@ -13,6 +13,9 @@ credentials/
 
 # SQLite Database files
 *.db
+*.db-wal
+*.db-shm
+*.backup
 seva.db
 
 # Study Notes & Details folders (Permanently gitignored as per project rule)

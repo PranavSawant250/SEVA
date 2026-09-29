@@ -54,7 +54,30 @@ cron.schedule('*/30 * * * *', async () => {
 });
 
 // Start Express Server
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`🚀 SEVA Backend running on port ${PORT}`);
   console.log(`🔗 OAuth Login Link: http://localhost:${PORT}/api/auth/gmail`);
 });
+
+// Graceful Shutdown Handler
+function gracefulShutdown(signal) {
+  console.log(`\n🛑 ${signal} received. Closing HTTP server and SQLite database cleanly...`);
+  server.close(() => {
+    try {
+      db.close();
+      console.log('✅ SQLite database connection closed cleanly.');
+    } catch (err) {
+      console.error('⚠️ Error closing database connection:', err.message);
+    }
+    process.exit(0);
+  });
+
+  // Force exit after 5 seconds if server fails to close
+  setTimeout(() => {
+    console.error('⚠️ Forcefully shutting down after timeout.');
+    process.exit(1);
+  }, 5000);
+}
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));

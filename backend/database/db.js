@@ -5,8 +5,9 @@ const path = require('path');
 const dbPath = path.join(__dirname, '..', 'seva.db');
 const db = new Database(dbPath);
 
-// Enable foreign key constraints
+// Enable foreign key constraints & Write-Ahead Logging (WAL) mode for corruption resilience
 db.pragma('foreign_keys = ON');
+db.pragma('journal_mode = WAL');
 
 // Create all 6 tables exactly as specified in the SEVA specification document
 db.exec(`
