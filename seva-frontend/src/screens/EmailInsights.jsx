@@ -166,12 +166,24 @@ export default function EmailInsights() {
             <AlertCircle size={18} className="shrink-0" />
             <span>{errorMsg}</span>
           </div>
-          <button
-            onClick={fetchEmails}
-            className="px-3 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-lg border border-red-500/40 text-[11px] font-medium"
-          >
-            Retry
-          </button>
+          <div className="flex items-center gap-2">
+            {(errorMsg.toLowerCase().includes('expired') || errorMsg.toLowerCase().includes('authenticated') || errorMsg.toLowerCase().includes('invalid_grant')) && (
+              <a
+                href="http://localhost:3001/api/auth/gmail"
+                target="_blank"
+                rel="noreferrer"
+                className="px-3 py-1 bg-accent/20 hover:bg-accent/30 text-accent rounded-lg border border-accent/40 text-[11px] font-medium transition-all"
+              >
+                Re-authenticate Google
+              </a>
+            )}
+            <button
+              onClick={fetchEmails}
+              className="px-3 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-lg border border-red-500/40 text-[11px] font-medium"
+            >
+              Retry
+            </button>
+          </div>
         </div>
       )}
 

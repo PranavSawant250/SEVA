@@ -72,7 +72,21 @@ router.get('/fetch', async (req, res) => {
       message: `Email fetch and AI analysis complete. ${insertedCount} new email(s) added, ${analyzedCount} email(s) analyzed.`
     });
   } catch (error) {
-    console.error('Error fetching emails:', error);
+    console.error('Error fetching emails:', error.message);
+    const isInvalidGrant = error.message?.includes('invalid_grant') || error.details?.includes('invalid_grant');
+    if (isInvalidGrant) {
+      const tokenPath = require('path').join(__dirname, '..', 'credentials', 'token.json');
+      if (require('fs').existsSync(tokenPath)) {
+        try { require('fs').unlinkSync(tokenPath); } catch (e) {}
+      }
+      return res.status(401).json({
+        success: false,
+        error: 'Google OAuth session expired',
+        details: 'invalid_grant',
+        authUrl: 'http://localhost:3001/api/auth/gmail',
+        message: 'Your Google session has expired. Please re-authenticate at http://localhost:3001/api/auth/gmail'
+      });
+    }
     res.status(500).json({ error: 'Failed to fetch emails', details: error.message });
   }
 });
