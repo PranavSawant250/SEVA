@@ -24,6 +24,7 @@ export default function DayPlan() {
   const [planItems, setPlanItems] = useState([]);
   const [tasks, setTasks] = useState([]); // Real tasks table items for cross-referencing IDs
   const [hasPlan, setHasPlan] = useState(false);
+  const [todayDate, setTodayDate] = useState('');
 
   // UI Action States
   const [generatingPlan, setGeneratingPlan] = useState(false);
@@ -46,6 +47,9 @@ export default function DayPlan() {
       if (planRes.data.success && Array.isArray(planRes.data.plan) && planRes.data.plan.length > 0) {
         setHasPlan(true);
         setPlanItems(planRes.data.plan);
+        if (planRes.data.date) {
+          setTodayDate(planRes.data.date);
+        }
       } else {
         setHasPlan(false);
         setPlanItems([]);
@@ -63,25 +67,70 @@ export default function DayPlan() {
     fetchPlanAndTasks();
   }, [fetchPlanAndTasks]);
 
-  // Helper: Find matching task row ID for a plan item name
+  // Helper: Find matching task row ID for a plan item name scoped to TODAY's date
   const findMatchingTask = (planTaskName) => {
     if (!planTaskName) return null;
     const cleanPlanName = planTaskName.trim().toLowerCase();
-    return tasks.find(t => t.name && t.name.trim().toLowerCase() === cleanPlanName) || null;
+    const targetDate = todayDate || new Date().toISOString().split('T')[0];
+
+    // 1. Candidate tasks scoped to TODAY's date
+    const todayTasks = tasks.filter(t => t.date === targetDate);
+    let match = todayTasks.find(t => {
+      if (!t.name) return false;
+      const tClean = t.name.trim().toLowerCase();
+      return tClean === cleanPlanName || tClean.includes(cleanPlanName) || cleanPlanName.includes(tClean);
+    });
+
+    // 2. Fallback: candidate active incomplete tasks (completed = 0) with date <= today
+    if (!match) {
+      const activeIncompleteTasks = tasks.filter(t => t.completed === 0 && t.date <= targetDate);
+      match = activeIncompleteTasks.find(t => {
+        if (!t.name) return false;
+        const tClean = t.name.trim().toLowerCase();
+        return tClean === cleanPlanName || tClean.includes(cleanPlanName) || cleanPlanName.includes(tClean);
+      });
+    }
+
+    return match || null;
   };
 
   // Action: Toggle Task Completion
   const handleToggleComplete = async (planItem) => {
-    const matchedTask = findMatchingTask(planItem.task);
+    let matchedTask = findMatchingTask(planItem.task);
+    
+    // If no task row exists for this plan item (e.g. surprise event), create one dynamically
     if (!matchedTask) {
-      alert(`Note: "${planItem.task}" is an inline event (e.g. surprise event) and does not have a separate task row in the database.`);
+      try {
+        const createRes = await client.post('/tasks', {
+          name: planItem.task,
+          priority: planItem.priority || 'high',
+          time_slot: planItem.time || null,
+          date: 'today'
+        });
+        if (createRes.data.success && createRes.data.task) {
+          matchedTask = createRes.data.task;
+        }
+      } catch (err) {
+        console.error('[SEVA] Error auto-creating task for plan event:', err);
+      }
+    }
+
+    if (!matchedTask) {
+      alert(`Unable to update completion for "${planItem.task}".`);
       return;
     }
 
     const newCompletedStatus = matchedTask.completed === 1 ? 0 : 1;
     
     // Optimistic UI update
-    setTasks(prev => prev.map(t => t.id === matchedTask.id ? { ...t, completed: newCompletedStatus } : t));
+    setTasks(prev => {
+      const exists = prev.some(t => t.id === matchedTask.id);
+      if (exists) {
+        return prev.map(t => t.id === matchedTask.id ? { ...t, completed: newCompletedStatus } : t);
+      } else {
+        return [...prev, { ...matchedTask, completed: newCompletedStatus }];
+      }
+    });
 
     try {
       await client.patch(`/tasks/${matchedTask.id}/complete`, { completed: newCompletedStatus });

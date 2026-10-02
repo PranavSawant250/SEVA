@@ -139,8 +139,28 @@ function parseAndValidatePlanArray(rawResponse, allowedTaskNames = null) {
     return { items: null, usedFallback: true };
   }
 
-  console.log(`   └─ AI plan: ${parsed.length} item(s) received, ${validItems.length} kept after validation, ${parsed.length - validItems.length} dropped.`);
-  return { items: validItems, usedFallback: false };
+  // ── Deduplication: each real task name may appear ONLY ONCE in the final plan ──
+  // Applied AFTER whitelist check — both checks are required.
+  const seenTaskNames = new Set();
+  const dedupedItems = [];
+  for (const item of validItems) {
+    const normName = item.task.trim().toLowerCase();
+    if (seenTaskNames.has(normName)) {
+      console.warn(`⚠️ Dropping duplicate task "${item.task}" — already scheduled once in this plan.`);
+    } else {
+      seenTaskNames.add(normName);
+      dedupedItems.push(item);
+    }
+  }
+
+  if (dedupedItems.length === 0) {
+    console.warn('⚠️ All items removed after deduplication — falling back to basic plan.');
+    return { items: null, usedFallback: true };
+  }
+
+  const droppedTotal = parsed.length - dedupedItems.length;
+  console.log(`   └─ AI plan: ${parsed.length} item(s) received, ${dedupedItems.length} kept (whitelist + dedup), ${droppedTotal} dropped.`);
+  return { items: dedupedItems, usedFallback: false };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -190,7 +210,19 @@ function buildFallbackPlan(tasks) {
     return 0;
   });
 
-  return sorted.map(t => ({
+  // Deduplicate by name — keep only the first occurrence of each task name
+  const seenNames = new Set();
+  const dedupedSorted = sorted.filter(t => {
+    const norm = (t.name || '').trim().toLowerCase();
+    if (seenNames.has(norm)) {
+      console.warn(`⚠️ Fallback plan: dropping duplicate task "${t.name}" — already scheduled once.`);
+      return false;
+    }
+    seenNames.add(norm);
+    return true;
+  });
+
+  return dedupedSorted.map(t => ({
     time: t.time_slot || null,
     task: t.name,
     priority: t.priority || 'medium',
@@ -221,12 +253,12 @@ async function generateDayPlan() {
 
   console.log(`\n🗓️  generateDayPlan() called for date: ${today} (${todayDayOfWeek})`);
 
-  // ── 1. Fetch today's tasks ──────────────────────────────────
-  console.log(`📋 Fetching tasks for date = ${today}...`);
+  // ── 1. Fetch active incomplete tasks (today or past uncompleted) ──
+  console.log(`📋 Fetching incomplete tasks for date <= ${today}...`);
   const tasks = db.prepare(`
     SELECT id, name, priority, time_slot, source, completed
     FROM tasks
-    WHERE date = ? AND completed = 0
+    WHERE date <= ? AND completed = 0
     ORDER BY
       CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,
       id ASC
@@ -371,12 +403,12 @@ async function replan(surpriseEvent) {
   console.log(`   └─ Surprise event: "${surpriseEvent}"`);
   console.log(`   └─ Remaining hours in day (server-computed): ${remainingHours}h`);
 
-  // ── 1. Fetch all incomplete tasks for today ─────────────────
-  console.log(`📋 Fetching incomplete tasks for today...`);
+  // ── 1. Fetch all incomplete tasks for today or past days ─────────────────
+  console.log(`📋 Fetching incomplete tasks for date <= ${today}...`);
   const incompleteTasks = db.prepare(`
     SELECT id, name, priority, time_slot, source, completed
     FROM tasks
-    WHERE date = ? AND completed = 0
+    WHERE date <= ? AND completed = 0
     ORDER BY
       CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,
       id ASC

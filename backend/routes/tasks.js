@@ -15,7 +15,7 @@ router.get('/', (req, res) => {
     const tasks = db.prepare(`
       SELECT id, name, priority, time_slot, source, completed, date, carry_forward
       FROM tasks
-      WHERE date = ?
+      WHERE date <= ?
       ORDER BY
         CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,
         id ASC
@@ -118,7 +118,7 @@ router.patch('/:id/complete', (req, res) => {
     }
 
     // Confirm the task exists first
-    const task = db.prepare(`SELECT id, name, completed FROM tasks WHERE id = ?`).get(taskId);
+    const task = db.prepare(`SELECT id, name, date, completed FROM tasks WHERE id = ?`).get(taskId);
 
     if (!task) {
       return res.status(404).json({ success: false, error: `No task found with id ${taskId}` });
@@ -129,14 +129,21 @@ router.patch('/:id/complete', (req, res) => {
       ? req.body.completed
       : 1;
 
-    db.prepare(`UPDATE tasks SET completed = ? WHERE id = ?`).run(requestedStatus, taskId);
+    const today = getTodayDate();
+    // If completing a task today whose date is prior to today, update date to today so night summary captures it
+    if (requestedStatus === 1 && task.date < today) {
+      db.prepare(`UPDATE tasks SET completed = ?, date = ? WHERE id = ?`).run(requestedStatus, today, taskId);
+    } else {
+      db.prepare(`UPDATE tasks SET completed = ? WHERE id = ?`).run(requestedStatus, taskId);
+    }
+
     const statusLabel = requestedStatus === 1 ? 'completed' : 'incomplete';
     console.log(`✅ Task id=${taskId} ("${task.name}") marked as ${statusLabel}.`);
 
     res.json({
       success: true,
       message: `Task ${taskId} marked as ${statusLabel}.`,
-      task: { id: taskId, name: task.name, completed: requestedStatus }
+      task: { id: taskId, name: task.name, completed: requestedStatus, date: requestedStatus === 1 && task.date < today ? today : task.date }
     });
   } catch (err) {
     console.error('❌ Error completing task:', err.message);
