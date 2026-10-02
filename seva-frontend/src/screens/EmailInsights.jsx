@@ -50,18 +50,14 @@ export default function EmailInsights() {
   // Action: Trigger Sync & AI Analysis
   const handleFetchAndAnalyze = async () => {
     setFetchingEmails(true);
-    setSyncStatusMsg('Fetching latest emails from Gmail OAuth...');
+    setSyncStatusMsg('Syncing Gmail & running AI analysis with Ollama / Phi-3.5...');
     setErrorMsg('');
 
     try {
-      // Step 1: Fetch recent emails from Gmail
+      // Step 1: Fetch recent emails from Gmail & automatically analyze via AI
       const fetchRes = await client.get('/emails/fetch');
-      setSyncStatusMsg('Running AI workload analysis with Ollama / Phi-3.5...');
-
-      // Step 2: Ensure all unanalyzed emails are processed
-      await client.get('/emails/analyze');
-
-      setSyncStatusMsg('Sync complete! Refreshing emails...');
+      
+      setSyncStatusMsg('Sync complete! Refreshing email insights...');
       await fetchEmails();
     } catch (err) {
       console.error('[SEVA] Email fetch/analyze error:', err);
