@@ -3,59 +3,69 @@ const router = express.Router();
 const db = require('../database/db');
 const { chatWithSeva } = require('../services/aiService');
 const { getTodayDate } = require('../utils/dateUtils');
+const { routeCommand } = require('../services/chatCommands');
 
 // ─────────────────────────────────────────────────────────────
 // POST /api/chat/message
-// Accepts user chat message, persists to chat_history, calls SEVA AI,
-// persists AI reply, and returns response.
+// Accepts user chat message, persists to chat_history.
+// BEFORE calling the AI:
+//   - passes the message through the deterministic command router
+//   - if the router returns a reply, stores it and returns immediately
+//   - only if router returns null does the AI handle it
 // ─────────────────────────────────────────────────────────────
 router.post('/message', async (req, res) => {
   try {
     const { message } = req.body;
 
-    // Validate input — message must be a non-empty string
+    // Validate input
     if (!message || typeof message !== 'string' || !message.trim()) {
       return res.status(400).json({
+        success: false,
         error: 'Missing required field: message',
         message: 'Please provide a non-empty message string in the request body.',
         example: { message: 'What is my plan for today?' }
       });
     }
+    if (message.trim().length > 4000) {
+      return res.status(400).json({ success: false, error: 'Message too long (max 4000 chars)' });
+    }
 
     const trimmedUserMsg = message.trim();
     const today = getTodayDate();
+    const nowDate = new Date();
 
-    console.log(`💬 POST /api/chat/message — user message: "${trimmedUserMsg.substring(0, 50)}..."`);
+    console.log(`💬 POST /api/chat/message — user: "${trimmedUserMsg.substring(0, 60)}${trimmedUserMsg.length > 60 ? '...' : ''}"`);
 
     // 1. Insert user message into chat_history FIRST
-    const userInsertResult = db.prepare(`
-      INSERT INTO chat_history (date, role, message)
-      VALUES (?, 'user', ?)
-    `).run(today, trimmedUserMsg);
+    const userInsertResult = db.prepare(
+      `INSERT INTO chat_history (date, role, message) VALUES (?, 'user', ?)`
+    ).run(today, trimmedUserMsg);
 
     const userMsgId = userInsertResult.lastInsertRowid;
 
-    // 2. Invoke chatWithSeva AI (passing userMsgId to exclude current turn from history query)
-    const reply = await chatWithSeva(trimmedUserMsg, userMsgId);
+    // 2. Try deterministic command router BEFORE any AI call
+    const commandReply = routeCommand(trimmedUserMsg, nowDate, nowDate);
 
-    // 3. Insert SEVA AI response into chat_history SECOND
-    db.prepare(`
-      INSERT INTO chat_history (date, role, message)
-      VALUES (?, 'assistant', ?)
-    `).run(today, reply);
+    let reply;
+    if (commandReply !== null) {
+      // Command handled — reply instantly, no AI call
+      reply = commandReply;
+      console.log(`   └─ Command handled: "${reply.substring(0, 60)}${reply.length > 60 ? '...' : ''}"`);
+    } else {
+      // 3. Fall through to AI
+      reply = await chatWithSeva(trimmedUserMsg, userMsgId);
+      console.log(`   └─ AI reply: "${reply.substring(0, 60)}${reply.length > 60 ? '...' : ''}"`);
+    }
 
-    console.log(`   └─ SEVA reply: "${reply.substring(0, 50)}..."`);
+    // 4. Store reply in chat_history
+    db.prepare(
+      `INSERT INTO chat_history (date, role, message) VALUES (?, 'assistant', ?)`
+    ).run(today, reply);
 
-    res.json({
-      success: true,
-      reply
-    });
+    return res.json({ success: true, reply, handled_by: commandReply !== null ? 'command_router' : 'ai' });
   } catch (err) {
     console.error('❌ Error in POST /api/chat/message:', err.message);
-    res.status(500).json({
-      error: 'Failed to process chat message',
-      details: err.message
-    });
+    return res.status(500).json({ success: false, error: 'Failed to process chat message', details: err.message });
   }
 });
 
@@ -66,7 +76,7 @@ router.post('/message', async (req, res) => {
 router.get('/history', (req, res) => {
   try {
     const targetDate = req.query.date || getTodayDate();
-    console.log(`💬 GET /api/chat/history — fetching messages for date: ${targetDate}`);
+    console.log(`💬 GET /api/chat/history — date: ${targetDate}`);
 
     const messages = db.prepare(`
       SELECT id, date, role, message, timestamp
@@ -75,18 +85,10 @@ router.get('/history', (req, res) => {
       ORDER BY id ASC
     `).all(targetDate);
 
-    res.json({
-      success: true,
-      date: targetDate,
-      count: messages.length,
-      messages
-    });
+    return res.json({ success: true, date: targetDate, count: messages.length, messages });
   } catch (err) {
     console.error('❌ Error in GET /api/chat/history:', err.message);
-    res.status(500).json({
-      error: 'Failed to fetch chat history',
-      details: err.message
-    });
+    return res.status(500).json({ success: false, error: 'Failed to fetch chat history', details: err.message });
   }
 });
 

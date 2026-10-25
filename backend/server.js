@@ -33,6 +33,7 @@ app.use('/api/tasks', require('./routes/tasks'));
 app.use('/api/chat', require('./routes/chat'));
 app.use('/api/summary', require('./routes/summary'));
 app.use('/api/timetable', require('./routes/timetable'));
+app.use('/api/goals', require('./routes/goals'));
 
 // STEP 5: Auto-fetch emails and analyze every 30 minutes using node-cron
 cron.schedule('*/30 * * * *', async () => {
