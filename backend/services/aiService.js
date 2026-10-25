@@ -237,11 +237,24 @@ async function processUnanalyzedEmails() {
   return count;
 }
 
+// ─────────────────────────────────────────────────────────────
+// Context window safety valve for chatWithSeva()
+// phi3.5 has a 131,072 token context window.
+// At ~4 chars/token, that's ~524,288 chars. Safe threshold = 75% = ~393,216 chars.
+// We trim OLDEST chat history messages first if we approach the threshold,
+// keeping night summaries and system context intact (they are compact and high-value).
+// ─────────────────────────────────────────────────────────────
+const PHI35_CONTEXT_CHARS = 131072 * 4; // ~524,288 chars
+const CHAT_SAFE_THRESHOLD = Math.floor(PHI35_CONTEXT_CHARS * 0.75); // ~393,216 chars
+
 /**
  * chatWithSeva(userMessage, currentInsertedMsgId = null)
  *
  * Conversational chat helper with SEVA AI.
- * Context-aware: ingests today's day plan, pending tasks, and recent 10 chat messages.
+ * Full historical context: ALL past chat messages (all dates, no LIMIT),
+ * plus last 10 night summaries as compact long-term digest.
+ * Safety valve: if assembled prompt exceeds 75% of phi3.5's 131k-token context window,
+ * oldest chat_history messages are trimmed first until it fits.
  *
  * @param {string} userMessage User prompt text
  * @param {number|null} currentInsertedMsgId Optional ID of user message just inserted into chat_history to exclude from history fetch
@@ -251,35 +264,45 @@ async function chatWithSeva(userMessage, currentInsertedMsgId = null) {
   const today = getTodayDate();
 
   try {
-    // 1. Fetch recent chat history for today (up to last 10 turns, excluding current turn if provided)
+    // ── 1. Fetch FULL chat history (all dates, no date filter, no LIMIT) ─────────
     let historyRows;
     if (currentInsertedMsgId) {
       historyRows = db.prepare(`
-        SELECT role, message
-        FROM (
-          SELECT id, role, message
-          FROM chat_history
-          WHERE date = ? AND id != ?
-          ORDER BY id DESC
-          LIMIT 10
-        )
+        SELECT id, role, message
+        FROM chat_history
+        WHERE id != ?
         ORDER BY id ASC
-      `).all(today, currentInsertedMsgId);
+      `).all(currentInsertedMsgId);
     } else {
       historyRows = db.prepare(`
-        SELECT role, message
-        FROM (
-          SELECT id, role, message
-          FROM chat_history
-          WHERE date = ?
-          ORDER BY id DESC
-          LIMIT 10
-        )
+        SELECT id, role, message
+        FROM chat_history
         ORDER BY id ASC
-      `).all(today);
+      `).all();
     }
 
-    // 2. Fetch today's plan from day_plans
+    // ── 2. Fetch last 10 night_summary rows as compact historical digest ──────────
+    const summaryRows = db.prepare(`
+      SELECT date, completed_tasks, missed_tasks, carry_forward, seva_message, streak
+      FROM night_summary
+      ORDER BY date DESC
+      LIMIT 10
+    `).all().reverse(); // Oldest first for chronological narrative
+
+    let summaryContext = '';
+    if (summaryRows.length > 0) {
+      summaryContext = summaryRows.map(s => {
+        let completed = [];
+        let missed = [];
+        try { completed = JSON.parse(s.completed_tasks || '[]'); } catch (_) {}
+        try { missed = JSON.parse(s.missed_tasks || '[]'); } catch (_) {}
+        const completedNames = completed.map(t => t.name).join(', ') || 'none';
+        const missedNames = missed.map(t => t.name).join(', ') || 'none';
+        return `[${s.date}] Streak: ${s.streak} day(s). Completed: ${completedNames}. Missed: ${missedNames}. Note: "${s.seva_message}"`.substring(0, 400);
+      }).join('\n');
+    }
+
+    // ── 3. Fetch today's plan from day_plans ──────────────────────────────────────
     const planRow = db.prepare(`SELECT plan_json FROM day_plans WHERE date = ?`).get(today);
     let planContext = 'No day plan generated yet for today.';
     if (planRow && planRow.plan_json) {
@@ -295,7 +318,7 @@ async function chatWithSeva(userMessage, currentInsertedMsgId = null) {
       }
     }
 
-    // 3. Fetch today's pending tasks (incomplete)
+    // ── 4. Fetch today's pending tasks (incomplete) ───────────────────────────────
     const pendingTasks = db.prepare(`
       SELECT name, priority, time_slot
       FROM tasks
@@ -307,29 +330,52 @@ async function chatWithSeva(userMessage, currentInsertedMsgId = null) {
       ? pendingTasks.map(t => `"${t.name}" (${t.priority}${t.time_slot ? `, ${t.time_slot}` : ''})`).join(', ')
       : 'None (all tasks completed or no tasks scheduled)';
 
-    // 4. Construct System Prompt
+    // ── 5. Build system prompt ────────────────────────────────────────────────────
     const systemPrompt = `You are SEVA, a warm, intelligent, and helpful personal planning assistant.
 
 Today's Date: ${today}
 Today's Current Plan: ${planContext}
-Pending Incomplete Tasks: ${pendingTasksContext}
+Pending Incomplete Tasks: ${pendingTasksContext}${
+  summaryContext ? `\n\nPast Daily Summaries (chronological digest):\n${summaryContext}` : ''
+}
 
 Instructions:
 - Respond naturally and conversationally.
 - Keep responses concise (2-4 sentences) unless the user explicitly requests details.
 - You may mix Hindi and English (Hinglish) naturally if the user does.
 - Strictly ground your responses in the context provided above. Do NOT invent meetings, deadlines, or plan slots that do not exist.
-- Never confirm details (times, dates, event names) that the user states unless they match your context exactly. If a user mentions a specific time, date, or detail that does NOT match what's in your provided context (for example, asking about a 5 PM meeting when your schedule has an event at 3:30 PM or no event at 5 PM), explicitly correct them with the ACTUAL scheduled time or state that no event exists at their stated time. Do NOT adopt their false premise or move events to match their question.
+- Never confirm details (times, dates, event names) that the user states unless they match your context exactly. If a user mentions a specific time, date, or detail that does NOT match what's in your provided context, explicitly correct them with the ACTUAL scheduled time or state that no event exists at their stated time.
 - If asked about information not present in context, state honestly that you do not have that information.`;
 
-    // 5. Format message payload for Ollama chat
+    // ── 6. Safety valve: estimate assembled prompt size, trim oldest msgs if needed ─
+    // Estimate: system prompt + history + new user message
+    const historyChars = historyRows.reduce((sum, r) => sum + r.message.length, 0);
+    const staticChars = systemPrompt.length + userMessage.length + 200; // 200 chars overhead
+    const totalEstimatedChars = staticChars + historyChars;
+
+    let trimmedCount = 0;
+    let workingHistory = [...historyRows]; // Mutable copy for trimming
+
+    if (totalEstimatedChars > CHAT_SAFE_THRESHOLD) {
+      let currentSize = totalEstimatedChars;
+      while (workingHistory.length > 0 && currentSize > CHAT_SAFE_THRESHOLD) {
+        const removed = workingHistory.shift(); // Remove oldest message
+        currentSize -= removed.message.length;
+        trimmedCount++;
+      }
+      console.warn(`⚠️ Chat history exceeds safe context size (${totalEstimatedChars} chars) — trimmed ${trimmedCount} oldest message(s) to fit under ${CHAT_SAFE_THRESHOLD} char threshold.`);
+    } else {
+      console.log(`   └─ Context size: ${totalEstimatedChars} chars | History: ${historyRows.length} messages | Threshold: ${CHAT_SAFE_THRESHOLD} chars — no trimming needed.`);
+    }
+
+    // ── 7. Format message payload for Ollama chat ─────────────────────────────────
     const formattedMessages = [
       { role: 'system', content: systemPrompt },
-      ...historyRows.map(r => ({ role: r.role === 'assistant' ? 'assistant' : 'user', content: r.message })),
+      ...workingHistory.map(r => ({ role: r.role === 'assistant' ? 'assistant' : 'user', content: r.message })),
       { role: 'user', content: userMessage }
     ];
 
-    console.log(`🤖 Calling Ollama chatWithSeva() with model "${PREFERRED_MODEL}"...`);
+    console.log(`🤖 Calling Ollama chatWithSeva() with model "${PREFERRED_MODEL}" (${formattedMessages.length} messages in payload)...`);
     const response = await ollama.chat({
       model: PREFERRED_MODEL,
       messages: formattedMessages,
