@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../database/db');
+const { parseTimeToMinutes } = require('../utils/dateUtils');
 
 // Valid days of the week, mapped to exact Title Case as expected by plannerService.js
 const VALID_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -12,22 +13,6 @@ function normalizeDay(day) {
   const normalized = lower.charAt(0).toUpperCase() + lower.slice(1);
   return VALID_DAYS.includes(normalized) ? normalized : null;
 }
-// Helper to convert "H:MM AM/PM" to minutes since midnight for sorting
-function parseTimeToMinutes(timeStr) {
-  if (!timeStr || typeof timeStr !== 'string') return null;
-  const match = timeStr.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
-  if (!match) return null;
-
-  let hour = parseInt(match[1], 10);
-  const minute = parseInt(match[2], 10);
-  const period = match[3].toUpperCase();
-
-  if (period === 'AM' && hour === 12) hour = 0;
-  if (period === 'PM' && hour !== 12) hour += 12;
-
-  return hour * 60 + minute;
-}
-
 
 // ─────────────────────────────────────────────────────────────
 // POST /api/timetable
