@@ -239,13 +239,22 @@ async function processUnanalyzedEmails() {
 
 // ─────────────────────────────────────────────────────────────
 // Context window safety valve for chatWithSeva()
-// phi3.5 has a 131,072 token context window.
-// At ~4 chars/token, that's ~524,288 chars. Safe threshold = 75% = ~393,216 chars.
-// We trim OLDEST chat history messages first if we approach the threshold,
-// keeping night summaries and system context intact (they are compact and high-value).
+//
+// ollama show phi3.5 reports architecture context_length = 131,072 tokens.
+// However: without explicit num_ctx, Ollama pre-allocates the FULL 131k KV cache
+// on cold load — that was the root cause of the 118.6s cold-start spike.
+//
+// We now set num_ctx = 8192 tokens explicitly in ollama.chat() options.
+// This caps KV cache to a practical working window: 8192 tokens * 4 chars ≈ 32,768 chars.
+// Safe trim threshold = 70% of that = ~22,937 chars.
+//
+// At current data volume (~3,500 chars), the trim valve will NEVER fire.
+// It activates gracefully months from now if history grows large.
+// Trimming: oldest chat_history messages only. System prompt, night summaries
+// and static context are NEVER trimmed — they are measured into staticChars.
 // ─────────────────────────────────────────────────────────────
-const PHI35_CONTEXT_CHARS = 131072 * 4; // ~524,288 chars
-const CHAT_SAFE_THRESHOLD = Math.floor(PHI35_CONTEXT_CHARS * 0.75); // ~393,216 chars
+const CHAT_NUM_CTX = 8192;                                      // explicit KV cache window (tokens)
+const CHAT_SAFE_THRESHOLD = Math.floor(CHAT_NUM_CTX * 4 * 0.70); // ~22,937 chars
 
 /**
  * chatWithSeva(userMessage, currentInsertedMsgId = null)
@@ -379,7 +388,12 @@ Instructions:
     const response = await ollama.chat({
       model: PREFERRED_MODEL,
       messages: formattedMessages,
-      options: { temperature: 0.3 }
+      keep_alive: '30m',          // Keep model loaded for 30 min — eliminates cold-start spikes
+      options: {
+        temperature: 0.3,
+        num_ctx: CHAT_NUM_CTX,    // Explicit 8192-token KV cache — prevents full 131k allocation
+        num_predict: 400          // Generous output ceiling: ~300 words, prevents runaway replies
+      }
     });
 
     const reply = response.message ? response.message.content.trim() : '';
