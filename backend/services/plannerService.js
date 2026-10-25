@@ -1,6 +1,10 @@
 const ollama = require('ollama').default || require('ollama');
 const db = require('../database/db');
-const { getTodayDate, getTodayDayOfWeek } = require('../utils/dateUtils');
+const { getTodayDate, getTodayDayOfWeek, minutesToTimeString } = require('../utils/dateUtils');
+// getTodayWindow is lazily required to avoid circular deps (settings route → db → plannerService)
+function getTodayWindowSafe(todayStr) {
+  try { return require('../routes/settings').getTodayWindow(todayStr); } catch { return null; }
+}
 
 // Use the same model constant pattern as aiService.js
 const PREFERRED_MODEL = process.env.OLLAMA_MODEL || 'phi3.5';
@@ -392,16 +396,29 @@ function createSurpriseEventSlot(surpriseEvent) {
 async function replan(surpriseEvent) {
   const today = getTodayDate();
 
-  // Calculate remaining hours server-side (current time → 11:59 PM)
+  // Calculate remaining hours using the user's daily window (no fixed bedtime).
+  // BEFORE: hardcoded 11:59 PM. AFTER: read window_end_minutes from daily_settings.
   const now = new Date();
-  const endOfDay = new Date(now);
-  endOfDay.setHours(23, 59, 0, 0);
-  const remainingMs = endOfDay.getTime() - now.getTime();
-  const remainingHours = Math.max(0, (remainingMs / (1000 * 60 * 60)).toFixed(1));
+  const nowMins = now.getHours() * 60 + now.getMinutes();
+  const windowData = getTodayWindowSafe(today);
+  let endMins;
+  let windowSource;
+  if (windowData && windowData.window_end_minutes !== null) {
+    endMins = windowData.window_end_minutes;
+    windowSource = `daily_settings (source: ${windowData.source})`;
+  } else {
+    // No window set — fall back to 11:59 PM and log loudly
+    endMins = 23 * 60 + 59;
+    windowSource = 'FALLBACK 11:59 PM (window not set — user should set their window)';
+    console.warn('⚠️  replan(): no daily window set. Falling back to 11:59 PM. Tell SEVA your free window.');
+  }
+  const remainingMins = Math.max(0, endMins - nowMins);
+  const remainingHours = (remainingMins / 60).toFixed(1);
 
   console.log(`\n🔄 replan() called for date: ${today}`);
   console.log(`   └─ Surprise event: "${surpriseEvent}"`);
-  console.log(`   └─ Remaining hours in day (server-computed): ${remainingHours}h`);
+  console.log(`   └─ Window end: ${minutesToTimeString(endMins)} (${windowSource})`);
+  console.log(`   └─ Remaining: ${remainingHours}h (${remainingMins} min from now)`);
 
   // ── 1. Fetch all incomplete tasks for today or past days ─────────────────
   console.log(`📋 Fetching incomplete tasks for date <= ${today}...`);
