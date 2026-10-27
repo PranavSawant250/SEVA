@@ -23,6 +23,7 @@ const {
   scheduleRefusal,
   assertNoOverlaps,
   enforceNoFlexibleOverlaps,
+  segMetrics,
   MAX_GOAL_SHARE,
   MAX_BLOCK_MINS,
   FLOOR_MINS,
@@ -230,6 +231,13 @@ function scenarioA() {
   const pgBlock = result.plan.find(b => b.goal_id === 2);
   check(!!pgBlock && pgBlock.floor === true && pgBlock.duration === FLOOR_MINS,
     `(a2) neglected step-less goal PostgreSQL gets a ${FLOOR_MINS}-min neglect floor session in plan`);
+  check(Array.isArray(pgBlock.step_ids) && pgBlock.step_ids.length === 0,
+    '(a2) step-less floor block carries empty step_ids=[] (never marks a normal step complete)');
+  const sbBlock = result.plan.find(b => b.goal_id === 1);
+  check(!!sbBlock && !sbBlock.floor && JSON.stringify(sbBlock.step_ids) === '[101]',
+    '(a2) stepped goal Spring Boot carries step_ids=[101] and is not a floor block');
+  check(SIX_GOALS[0].steps.every(s => s.done === false),
+    '(a2) scheduling does not mutate step.done on stepped goals');
   check(result.shrunk.some(s => s.goal_id === 2 && s.given === FLOOR_MINS && s.needed === 60),
     '(a2) PostgreSQL floor session appears in shrunk (30 min given vs 60 min full session)');
   check(result.deferred.every(d => /largest free gap \d+ min \(\d+ usable after buffers\)/.test(d.reason)),
@@ -296,6 +304,18 @@ function scenarioB2() {
   check(!guard.plan.some(b => b.task === 'Rogue goal block'), '(b2) returned plan does not contain the overlapping block');
   check(guard.plan.some(b => b.task === 'Good goal block'), '(b2) non-overlapping block kept');
   check(guard.warnings[0].includes('SCHEDULER BUG'), '(b2) flexible overlap is logged loudly as SCHEDULER BUG');
+
+  // Direct verification that assertNoOverlaps throws (never silently passes on a warning)
+  let threwOnOverlap = false;
+  try {
+    assertNoOverlaps([
+      { task: 'Fixed Class', startMinutes: 840, duration: 120, source: 'fixed' },
+      { task: 'Overlapping Flex', startMinutes: 900, duration: 45, source: 'goal' }
+    ]);
+  } catch (err) {
+    threwOnOverlap = /OVERLAP/.test(err.message);
+  }
+  check(threwOnOverlap === true, '(b2) assertNoOverlaps throws hard OVERLAP error when a flexible block overlaps');
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -577,6 +597,17 @@ function scenarioM() {
   console.log('');
   const run = result.plan.find(b => b.source === 'habit');
   check(!!run && run.startMinutes === 390, '(m) run starts at 6:30 AM');
+  // Check 2: Buffer accounting across flexible boundaries (rightFlex before pinned 6:30 AM run)
+  check(result.deferred.some(d => d.reason.includes('largest free gap 60 min (30 usable after buffers)')),
+    '(m) deferral reason reports consistent largest free gap 60 min (30 usable after buffers) before pinned 6:30 AM run');
+  const segBeforeRun = { start: 300, end: 390, leftFlex: false, rightFlex: true, blocks: [{ duration: 30 }] };
+  const mBefore = segMetrics(segBeforeRun, 15);
+  check(mBefore.rawFree === 60 && mBefore.avail === 30,
+    `(m) segMetrics with 1 block + rightFlex: rawFree=${mBefore.rawFree} (expected 60), avail=${mBefore.avail} (expected 30)`);
+  const segAfterRun = { start: 420, end: 540, leftFlex: true, rightFlex: false, blocks: [{ duration: 90 }] };
+  const mAfter = segMetrics(segAfterRun, 15);
+  check(mAfter.rawFree === 15 && mAfter.avail === 0,
+    `(m) segMetrics with 1 block + leftFlex: rawFree=${mAfter.rawFree} (expected 15), avail=${mAfter.avail} (expected 0)`);
   checkSegmentOrder(result, '(m)');
 }
 
@@ -616,6 +647,7 @@ function runStarvation14Days(enableFloor, neglectDays = DEFAULT_NEGLECT_DAYS) {
   const dsaById = { 1: 0, 2: 0, 3: 0 };
   const scheduledDays = [];
   const dailyLog = [];
+  let allFloorBlocksClean = true;
 
   console.log(`\n${'═'.repeat(70)}`);
   console.log(`SCENARIO (n) — 14-DAY SIMULATION (${enableFloor ? `FLOOR ON: FLOOR_MINS=${FLOOR_MINS}, MAX_FLOOR_PER_DAY=${MAX_FLOOR_PER_DAY}, neglect_days=${neglectDays}` : 'FLOOR OFF'})`);
@@ -637,7 +669,14 @@ function runStarvation14Days(enableFloor, neglectDays = DEFAULT_NEGLECT_DAYS) {
 
     const pgBlock = res.plan.find(b => b.goal_id === 2);
     const pgScheduled = !!pgBlock;
-    if (pgScheduled) scheduledDays.push(day);
+    if (pgScheduled) {
+      scheduledDays.push(day);
+      if (!pgBlock.floor || !Array.isArray(pgBlock.step_ids) || pgBlock.step_ids.length !== 0) {
+        allFloorBlocksClean = false;
+      }
+    }
+    const sbStepsUntouched = baseGoals[0].steps.every(s => s.done === false);
+    if (!sbStepsUntouched) allFloorBlocksClean = false;
 
     console.log(`\n  Day ${String(day).padStart(2)} (${today}) | PostgreSQL dsa=${pgBefore.days_since_activity} (behind_by=${pgBefore.behind_by}%) | PostgreSQL scheduled: ${pgScheduled ? `YES (${pgBlock.duration}min${pgBlock.floor ? ', floor' : ''})` : 'NO'}`);
     console.log('    goal                      | prio | days_left | rem | behind% | dsa | aging | score  | need | given | mins');
@@ -663,7 +702,7 @@ function runStarvation14Days(enableFloor, neglectDays = DEFAULT_NEGLECT_DAYS) {
 
   const firstDay = scheduledDays.length > 0 ? scheduledDays[0] : null;
   console.log(`\n  Summary (${enableFloor ? 'FLOOR ON' : 'FLOOR OFF'}): PostgreSQL first scheduled day = ${firstDay === null ? 'never' : `day ${firstDay}`}; all scheduled days = [${scheduledDays.join(', ') || 'none'}]`);
-  return { firstDay, scheduledDays, dailyLog };
+  return { firstDay, scheduledDays, dailyLog, allFloorBlocksClean };
 }
 
 function scenarioN() {
@@ -673,6 +712,9 @@ function scenarioN() {
   const on  = runStarvation14Days(true, neglectDays);
 
   console.log('');
+  // Check 3: Policy defaults exported and configurable
+  check(FLOOR_MINS === 30 && MAX_FLOOR_PER_DAY === 2 && DEFAULT_NEGLECT_DAYS === 3,
+    `(n) Neglect-floor policy defaults: FLOOR_MINS=${FLOOR_MINS}, MAX_FLOOR_PER_DAY=${MAX_FLOOR_PER_DAY}, DEFAULT_NEGLECT_DAYS=${DEFAULT_NEGLECT_DAYS}`);
   check(off.firstDay === null, `(n) Floor OFF: PostgreSQL first scheduled = ${off.firstDay ?? 'never'} (starved all 14 days despite aging + caps)`);
   check(on.firstDay !== null && on.firstDay <= neglectDays + 1,
     `(n) Floor ON: PostgreSQL first scheduled on day ${on.firstDay} (<= neglect_days+1 = ${neglectDays + 1})`);
@@ -687,6 +729,9 @@ function scenarioN() {
   const lastScheduled = on.scheduledDays[on.scheduledDays.length - 1];
   check(14 - lastScheduled < neglectDays + 1,
     `(n) Floor ON: after last session on day ${lastScheduled}, only ${14 - lastScheduled} day(s) remain (< neglect_days+1 = ${neglectDays + 1})`);
+  // Check 4: Floor sessions for step-less goals have step_ids=[] and never falsely mark any goal step done
+  check(on.allFloorBlocksClean,
+    '(n) Floor ON: every PostgreSQL floor session has step_ids=[] and no goal step is falsely marked done');
 }
 
 // ── Optional: prove a failing assertion exits non-zero ──

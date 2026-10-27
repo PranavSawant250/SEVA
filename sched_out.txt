@@ -155,6 +155,9 @@ SCORE TABLE   today = 2026-10-26   budget = 300min   caps: MAX_GOAL_SHARE=0.5, M
   ✔ (a2) "Shell Scripting Lab" got 0/1 units → listed as behind pace
   ✔ (a2) inside every segment: urgent/forced first, then priority high → low
   ✔ (a2) neglected step-less goal PostgreSQL gets a 30-min neglect floor session in plan
+  ✔ (a2) step-less floor block carries empty step_ids=[] (never marks a normal step complete)
+  ✔ (a2) stepped goal Spring Boot carries step_ids=[101] and is not a floor block
+  ✔ (a2) scheduling does not mutate step.done on stepped goals
   ✔ (a2) PostgreSQL floor session appears in shrunk (30 min given vs 60 min full session)
   ✔ (a2) deferred goals show both numbers: "largest free gap X min (Y usable after buffers)"
   ✔ (a2) LeetCode needs 8/day, capped to 2 → visible as behind pace
@@ -260,6 +263,7 @@ WARNINGS:
   ✔ (b2) returned plan does not contain the overlapping block
   ✔ (b2) non-overlapping block kept
   ✔ (b2) flexible overlap is logged loudly as SCHEDULER BUG
+  ✔ (b2) assertNoOverlaps throws hard OVERLAP error when a flexible block overlaps
 
 ──────────────────────────────────────────────────────────────────────
 SCENARIO (c1) 40-minute window WITHOUT a neglected step-less goal — all need ≥45 min
@@ -697,22 +701,25 @@ PLAN (chronological):
               → ends 8:45 AM (90min)  units=2
 
 DEFERRED:
-  ✗ Spring Boot Basics: no gap long enough (needs 60 min, largest free gap 45 min (30 usable after buffers))
-  ✗ Trees topic: no gap long enough (needs 60 min, largest free gap 45 min (30 usable after buffers))
-  ✗ Shell Scripting Lab: no gap long enough (needs 60 min, largest free gap 45 min (30 usable after buffers))
+  ✗ Spring Boot Basics: no gap long enough (needs 60 min, largest free gap 60 min (30 usable after buffers))
+  ✗ Trees topic: no gap long enough (needs 60 min, largest free gap 60 min (30 usable after buffers))
+  ✗ Shell Scripting Lab: no gap long enough (needs 60 min, largest free gap 60 min (30 usable after buffers))
 
 SHRUNK:
   ⬇ PostgreSQL + Spring Boot: given=30min needed=60min (neglect floor session (30 min vs 60 min full session; 6d inactive))
 
 BEHIND PACE (never dropped silently):
   ⏳ LeetCode 320: needs 8, given 2 — MAX_BLOCK_MINS: one 120-min block/day = 2 unit(s)
-  ⏳ Spring Boot Basics: needs 3, given 0 — MAX_BLOCK_MINS: one 120-min block/day = 2 unit(s); placement: no gap long enough (needs 60 min, largest free gap 45 min (30 usable after buffers))
-  ⏳ Trees topic: needs 3, given 0 — MAX_BLOCK_MINS: one 120-min block/day = 2 unit(s); placement: no gap long enough (needs 60 min, largest free gap 45 min (30 usable after buffers))
-  ⏳ Shell Scripting Lab: needs 1, given 0 — placement: no gap long enough (needs 60 min, largest free gap 45 min (30 usable after buffers))
+  ⏳ Spring Boot Basics: needs 3, given 0 — MAX_BLOCK_MINS: one 120-min block/day = 2 unit(s); placement: no gap long enough (needs 60 min, largest free gap 60 min (30 usable after buffers))
+  ⏳ Trees topic: needs 3, given 0 — MAX_BLOCK_MINS: one 120-min block/day = 2 unit(s); placement: no gap long enough (needs 60 min, largest free gap 60 min (30 usable after buffers))
+  ⏳ Shell Scripting Lab: needs 1, given 0 — placement: no gap long enough (needs 60 min, largest free gap 60 min (30 usable after buffers))
 
 ✅ No flexible block overlaps anything
 
   ✔ (m) run starts at 6:30 AM
+  ✔ (m) deferral reason reports consistent largest free gap 60 min (30 usable after buffers) before pinned 6:30 AM run
+  ✔ (m) segMetrics with 1 block + rightFlex: rawFree=60 (expected 60), avail=30 (expected 30)
+  ✔ (m) segMetrics with 1 block + leftFlex: rawFree=15 (expected 15), avail=0 (expected 0)
   ✔ (m) inside every segment: urgent/forced first, then priority high → low
 
 ──────────────────────────────────────────────────────────────────────
@@ -927,11 +934,13 @@ SCENARIO (n) — 14-DAY SIMULATION (FLOOR ON: FLOOR_MINS=30, MAX_FLOOR_PER_DAY=2
 
   Summary (FLOOR ON): PostgreSQL first scheduled day = day 4; all scheduled days = [4, 8, 12]
 
+  ✔ (n) Neglect-floor policy defaults: FLOOR_MINS=30, MAX_FLOOR_PER_DAY=2, DEFAULT_NEGLECT_DAYS=3
   ✔ (n) Floor OFF: PostgreSQL first scheduled = never (starved all 14 days despite aging + caps)
   ✔ (n) Floor ON: PostgreSQL first scheduled on day 4 (<= neglect_days+1 = 4)
   ✔ (n) Floor ON: scheduled again on day 8 (4 days after day 4, <= neglect_days+1 = 4)
   ✔ (n) Floor ON: scheduled again on day 12 (4 days after day 8, <= neglect_days+1 = 4)
   ✔ (n) Floor ON: after last session on day 12, only 2 day(s) remain (< neglect_days+1 = 4)
+  ✔ (n) Floor ON: every PostgreSQL floor session has step_ids=[] and no goal step is falsely marked done
 
 ══════════════════════════════════════════════════════════════════════
 ALL SCENARIOS (a)–(n) + (b2) PASSED

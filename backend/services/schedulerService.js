@@ -86,10 +86,11 @@ const MAX_BLOCK_MINS        = 120;  // ASSUMPTION: one block per goal per day, a
 const AGING_RATE            = 0.1;  // ASSUMPTION: +10% score per day since last activity
 const AGING_CAP_DAYS        = 10;   // ASSUMPTION: aging stops growing after 10 days (max ×2.0)
 
-// Neglect floor (guaranteed minimum session for neglected step-less milestone goals)
-const FLOOR_MINS            = 30;   // ASSUMPTION: 30-min floor session for neglected step-less milestone goals
-const MAX_FLOOR_PER_DAY     = 2;    // ASSUMPTION: at most 2 neglect floor sessions scheduled per day
-const DEFAULT_NEGLECT_DAYS  = 3;    // default preferences.neglect_days threshold
+// Neglect floor (configurable policy assumptions, NOT universal rules;
+// callers may override via neglectDays, floorMins, maxFloorPerDay options)
+const FLOOR_MINS            = 30;   // POLICY ASSUMPTION (configurable): 30-min floor session for neglected step-less milestone goals
+const MAX_FLOOR_PER_DAY     = 2;    // POLICY ASSUMPTION (configurable): at most 2 neglect floor sessions scheduled per day
+const DEFAULT_NEGLECT_DAYS  = 3;    // POLICY ASSUMPTION (configurable): default preferences.neglect_days threshold
 
 const PRIORITY_RANK = { high: 0, medium: 1, low: 2 };
 const LAYER_RANK    = b => {
@@ -313,28 +314,34 @@ function computeGapObjects(fixedTimeline, nowMinutes, windowEndMinutes) {
 }
 
 /**
- * Raw free minutes remaining in a segment after existing blocks and the
- * buffers already placed between/beside those existing blocks, BEFORE
- * charging the buffer that a new block would require.
+ * Unified segment buffer accounting for [seg.start, seg.end]:
+ * - committedBuffers: buffers already consumed before/between the k existing
+ *   blocks in seg (`(k - 1) + (seg.leftFlex ? 1 : 0)` when k >= 1, else 0).
+ * - rawFree: unallocated clock minutes remaining in seg after existing blocks
+ *   and their committedBuffers (matches the [--- Xmin free/buffer ---] span).
+ * - nextBuffers: additional buffers required to insert one more block into seg
+ *   (`(seg.leftFlex ? 1 : 0) + (seg.rightFlex ? 1 : 0)` when k === 0;
+ *    `1 + (seg.rightFlex ? 1 : 0)` when k >= 1).
+ * - avail: usable minutes for the next block (`max(0, rawFree - nextBuffers * bufferMinutes)`).
  */
-function segRawFree(seg, bufferMinutes) {
+function segMetrics(seg, bufferMinutes) {
   const k = seg.blocks.length;
-  if (k === 0) return Math.max(0, seg.end - seg.start);
   const used = seg.blocks.reduce((s, b) => s + b.duration, 0);
-  const existingBuffers = (k - 1) + (seg.leftFlex ? 1 : 0) + (seg.rightFlex ? 1 : 0);
-  return Math.max(0, seg.end - seg.start - used - existingBuffers * bufferMinutes);
+  const committedBuffers = k === 0 ? 0 : (k - 1) + (seg.leftFlex ? 1 : 0);
+  const rawFree = Math.max(0, seg.end - seg.start - used - committedBuffers * bufferMinutes);
+  const nextBuffers = k === 0
+    ? (seg.leftFlex ? 1 : 0) + (seg.rightFlex ? 1 : 0)
+    : 1 + (seg.rightFlex ? 1 : 0);
+  const avail = Math.max(0, rawFree - nextBuffers * bufferMinutes);
+  return { rawFree, avail, committedBuffers, nextBuffers };
 }
 
-/**
- * Free minutes a segment can offer the NEXT block.
- * Buffers: between consecutive blocks, plus one at each edge that touches a
- * pinned flexible block (leftFlex / rightFlex). None at fixed items/window edges.
- */
+function segRawFree(seg, bufferMinutes) {
+  return segMetrics(seg, bufferMinutes).rawFree;
+}
+
 function segAvail(seg, bufferMinutes) {
-  const used = seg.blocks.reduce((s, b) => s + b.duration, 0);
-  const n = seg.blocks.length + 1;
-  const buffers = (n - 1) + (seg.leftFlex ? 1 : 0) + (seg.rightFlex ? 1 : 0);
-  return Math.max(0, seg.end - seg.start - used - buffers * bufferMinutes);
+  return segMetrics(seg, bufferMinutes).avail;
 }
 
 function formatGapStats(maxRaw, maxAvail) {
@@ -918,6 +925,9 @@ module.exports = {
   buildGoalBlock,
   buildFixedTimeline,
   computeGapObjects,
+  segMetrics,
+  segRawFree,
+  segAvail,
   // Constants
   MINS_PER_COUNT_UNIT,
   MINS_PER_STEP,
