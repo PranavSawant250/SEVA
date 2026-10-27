@@ -1,6 +1,7 @@
 const ollama = require('ollama').default || require('ollama');
 const db = require('../database/db');
-const { getTodayDate } = require('../utils/dateUtils');
+const { getTodayDate, getTomorrowDate, minutesToTimeString } = require('../utils/dateUtils');
+const { getAllGoals } = require('./goalsService');
 
 
 // Preferred model configuration (Standardized on phi3.5 after 5/5 precision test)
@@ -269,8 +270,9 @@ const CHAT_SAFE_THRESHOLD = Math.floor(CHAT_NUM_CTX * 4 * 0.70); // ~22,937 char
  * @param {number|null} currentInsertedMsgId Optional ID of user message just inserted into chat_history to exclude from history fetch
  * @returns {string} SEVA's response text (plain text)
  */
-async function chatWithSeva(userMessage, currentInsertedMsgId = null) {
-  const today = getTodayDate();
+async function chatWithSeva(userMessage, currentInsertedMsgId = null, todayDateObj = new Date()) {
+  const today = getTodayDate(todayDateObj);
+  const tomorrow = getTomorrowDate(todayDateObj);
 
   try {
     // ── 1. Fetch FULL chat history (all dates, no date filter, no LIMIT) ─────────
@@ -289,6 +291,15 @@ async function chatWithSeva(userMessage, currentInsertedMsgId = null) {
         ORDER BY id ASC
       `).all();
     }
+
+    // Cap any individual legacy history message in memory to 1600 chars (~400 tokens, matching num_predict=400)
+    // so pre-safety-valve runaway replies (e.g. 21k chars) don't pollute context or exhaust VRAM
+    historyRows = historyRows.map(r => ({
+      ...r,
+      message: (r.message && r.message.length > 1600)
+        ? r.message.substring(0, 1600) + '...'
+        : (r.message || '')
+    }));
 
     // ── 2. Fetch last 10 night_summary rows as compact historical digest ──────────
     const summaryRows = db.prepare(`
@@ -311,7 +322,38 @@ async function chatWithSeva(userMessage, currentInsertedMsgId = null) {
       }).join('\n');
     }
 
-    // ── 3. Fetch today's plan from day_plans ──────────────────────────────────────
+    // ── 3. Fetch active goals with real progress, behind_by, days_left ───────────
+    const activeGoals = getAllGoals(todayDateObj).filter(g => g.status === 'active');
+    const goalsContext = activeGoals.length > 0
+      ? activeGoals.map(g => {
+          const deadlineStatus = g.is_overdue
+            ? `OVERDUE (deadline ${g.deadline}, days_left=0)`
+            : `days_left=${g.days_left} (deadline ${g.deadline})`;
+          const extra = g.goal_type === 'count'
+            ? `, ${g.current_count}/${g.target_count} problems done`
+            : g.goal_type === 'frequency'
+            ? `, ${g.days_this_week || 0}/${g.per_week} days this week`
+            : g.progress_source === 'no_progress_data'
+            ? `, no steps defined yet`
+            : '';
+          return `- "${g.title}" [${g.category}, priority=${g.priority}]: progress=${g.progress}%, expected=${g.expected_progress}%, behind_by=${g.behind_by}%, ${deadlineStatus}${extra}`;
+        }).join('\n')
+      : 'None (no active goals).';
+
+    // ── 4. Fetch today's window and today's saved plan ───────────────────────────
+    let windowContext = 'No window set for today.';
+    try {
+      const { getTodayWindow } = require('../routes/settings');
+      const win = getTodayWindow(today);
+      if (win) {
+        if (win.done_for_day === 1) {
+          windowContext = 'Done for today.';
+        } else if (win.window_end_minutes !== null) {
+          windowContext = `Active until ${minutesToTimeString(win.window_end_minutes)} (${win.source}).`;
+        }
+      }
+    } catch (_) {}
+
     const planRow = db.prepare(`SELECT plan_json FROM day_plans WHERE date = ?`).get(today);
     let planContext = 'No day plan generated yet for today.';
     if (planRow && planRow.plan_json) {
@@ -327,7 +369,7 @@ async function chatWithSeva(userMessage, currentInsertedMsgId = null) {
       }
     }
 
-    // ── 4. Fetch today's pending tasks (incomplete) ───────────────────────────────
+    // ── 5. Fetch today's pending tasks and tomorrow's planned tasks ──────────────
     const pendingTasks = db.prepare(`
       SELECT name, priority, time_slot
       FROM tasks
@@ -339,12 +381,29 @@ async function chatWithSeva(userMessage, currentInsertedMsgId = null) {
       ? pendingTasks.map(t => `"${t.name}" (${t.priority}${t.time_slot ? `, ${t.time_slot}` : ''})`).join(', ')
       : 'None (all tasks completed or no tasks scheduled)';
 
-    // ── 5. Build system prompt ────────────────────────────────────────────────────
+    const tomorrowTasks = db.prepare(`
+      SELECT name, priority, time_slot, duration_min
+      FROM tasks
+      WHERE date = ? AND completed = 0
+      ORDER BY id ASC
+    `).all(tomorrow);
+
+    const tomorrowTasksContext = tomorrowTasks.length > 0
+      ? tomorrowTasks.map(t => `"${t.name}" (${t.priority}${t.time_slot ? `, ${t.time_slot}` : ''}${t.duration_min ? `, ${t.duration_min}m` : ''})`).join(', ')
+      : 'Nothing planned yet for tomorrow.';
+
+    // ── 6. Build system prompt (never trimmed by safety valve) ───────────────────
     const systemPrompt = `You are SEVA, a warm, intelligent, and helpful personal planning assistant.
 
 Today's Date: ${today}
+Tomorrow's Date: ${tomorrow}
+Today's Window: ${windowContext}
 Today's Current Plan: ${planContext}
-Pending Incomplete Tasks: ${pendingTasksContext}${
+Pending Incomplete Tasks Today: ${pendingTasksContext}
+Tasks Already Planned for Tomorrow (${tomorrow}): ${tomorrowTasksContext}
+
+Active Goals (ONLY these goals exist in the database):
+${goalsContext}${
   summaryContext ? `\n\nPast Daily Summaries (chronological digest):\n${summaryContext}` : ''
 }
 
@@ -352,7 +411,9 @@ Instructions:
 - Respond naturally and conversationally.
 - Keep responses concise (2-4 sentences) unless the user explicitly requests details.
 - You may mix Hindi and English (Hinglish) naturally if the user does.
-- Strictly ground your responses in the context provided above. Do NOT invent meetings, deadlines, or plan slots that do not exist.
+- Only state goal progress numbers that appear in the context above.
+- If the user asks about a goal that is NOT listed under "Active Goals" above (for example, a Rust goal or any other unlisted goal), state clearly that no such goal exists in your goals list.
+- Strictly ground your responses in the context provided above. Do NOT invent meetings, deadlines, tasks, or plan slots that do not exist.
 - Never confirm details (times, dates, event names) that the user states unless they match your context exactly. If a user mentions a specific time, date, or detail that does NOT match what's in your provided context, explicitly correct them with the ACTUAL scheduled time or state that no event exists at their stated time.
 - If asked about information not present in context, state honestly that you do not have that information.`;
 
@@ -378,23 +439,51 @@ Instructions:
     }
 
     // ── 7. Format message payload for Ollama chat ─────────────────────────────────
+    // Place a compact system grounding reminder right before the latest user message
+    // so phi3.5 (3.8B) attends strictly to current DB facts even when chat_history has many turns.
+    const liveGroundingReminder = [
+      `LIVE DATABASE FACTS (ground your answer ONLY in these facts; reply in 2-4 concise sentences, no motivational quotes or Pomodoro tips):`,
+      `Today (${today}) Window: ${windowContext}`,
+      `Today (${today}) Plan: ${planContext}`,
+      `Tomorrow (${tomorrow}) Planned Tasks: ${tomorrowTasksContext}`,
+      `Active Goals:\n${goalsContext}`,
+      `Rule: Only state goal progress numbers that appear above. If asked about a goal not listed in Active Goals above, state clearly that no such goal exists. When asked about tomorrow (${tomorrow}), report ONLY the Tomorrow Planned Tasks line above (do NOT list today's plan items as tomorrow's).`
+    ].join('\n');
+
     const formattedMessages = [
       { role: 'system', content: systemPrompt },
       ...workingHistory.map(r => ({ role: r.role === 'assistant' ? 'assistant' : 'user', content: r.message })),
+      { role: 'system', content: liveGroundingReminder },
       { role: 'user', content: userMessage }
     ];
 
     console.log(`🤖 Calling Ollama chatWithSeva() with model "${PREFERRED_MODEL}" (${formattedMessages.length} messages in payload)...`);
-    const response = await ollama.chat({
-      model: PREFERRED_MODEL,
-      messages: formattedMessages,
-      keep_alive: '30m',          // Keep model loaded for 30 min — eliminates cold-start spikes
-      options: {
-        temperature: 0.3,
-        num_ctx: CHAT_NUM_CTX,    // Explicit 8192-token KV cache — prevents full 131k allocation
-        num_predict: 400          // Generous output ceiling: ~300 words, prevents runaway replies
-      }
-    });
+    let response;
+    try {
+      response = await ollama.chat({
+        model: PREFERRED_MODEL,
+        messages: formattedMessages,
+        keep_alive: '30m',          // Keep model loaded for 30 min — eliminates cold-start spikes
+        options: {
+          temperature: 0.3,
+          num_ctx: CHAT_NUM_CTX,    // Explicit 8192-token KV cache — prevents full 131k allocation
+          num_predict: 400          // Generous output ceiling: ~300 words, prevents runaway replies
+        }
+      });
+    } catch (primaryErr) {
+      console.warn(`⚠️ Primary Ollama chat call failed (${primaryErr.message}); retrying with CPU fallback...`);
+      response = await ollama.chat({
+        model: PREFERRED_MODEL,
+        messages: formattedMessages,
+        keep_alive: '30m',
+        options: {
+          temperature: 0.3,
+          num_ctx: 4096,
+          num_predict: 400,
+          num_gpu: 0
+        }
+      });
+    }
 
     const reply = response.message ? response.message.content.trim() : '';
     return reply || "I'm here to help! What would you like to know about your day?";
