@@ -31,6 +31,9 @@ export default function Dashboard() {
   const [meetingsCount, setMeetingsCount] = useState(0);
   const [topPriorities, setTopPriorities] = useState([]);
   const [hasPlan, setHasPlan] = useState(false);
+  const [reminders, setReminders] = useState([]);
+  const [windowState, setWindowState] = useState(null);
+  const [updatingWindow, setUpdatingWindow] = useState(false);
 
   // UI Action States
   const [generatingPlan, setGeneratingPlan] = useState(false);
@@ -65,40 +68,35 @@ export default function Dashboard() {
         return;
       }
 
-      // 2. Fetch Emails Today
-      const emailsRes = await client.get('/emails/today');
+      // 2. Fetch Emails, Tasks, Plan, Goal Reminders, and Today's Window in parallel
+      const [emailsRes, tasksRes, planRes, remRes, winRes] = await Promise.all([
+        client.get('/emails/today'),
+        client.get('/tasks'),
+        client.get('/plan/today'),
+        client.get('/goals/reminders').catch(() => ({ data: { reminders: [] } })),
+        client.get('/settings/today').catch(() => ({ data: null }))
+      ]);
+
       const emailList = emailsRes.data.emails || [];
       setEmailCount(emailList.length);
 
-      /*
-        Honest Data Choice for Gmail Sync Time:
-        The SEVA database does not maintain a dedicated 'sync_logs' table.
-        We check if emails exist for today: if so, we extract the latest email's date.
-        Otherwise, we fall back to displaying the timestamp when Dashboard fetched data.
-      */
       if (emailList.length > 0 && emailList[0].date) {
         setLatestEmailDate(emailList[0].date);
       } else {
         setLatestEmailDate(null);
       }
 
-      // 3. Fetch Tasks Pending
-      const tasksRes = await client.get('/tasks');
       const taskList = tasksRes.data.tasks || [];
       const pending = taskList.filter(t => t.completed === 0).length;
       setPendingTaskCount(pending);
 
-      // 4. Fetch Day Plan Today
-      const planRes = await client.get('/plan/today');
+      setReminders(remRes.data?.reminders || []);
+      setWindowState(winRes.data || null);
+
       if (planRes.data.success && Array.isArray(planRes.data.plan) && planRes.data.plan.length > 0) {
         setHasPlan(true);
         const planItems = planRes.data.plan;
 
-        /*
-          Heuristic for Meetings Scheduled Count:
-          The database doesn't have a strict 'is_meeting' column in plan_json.
-          We count items where source !== 'manual' OR the item description contains meeting/viva/class/lecture/lab/discussion.
-        */
         const meetingItems = planItems.filter(item => {
           const text = (item.task || '').toLowerCase();
           const isNonManual = item.source && item.source !== 'manual';
@@ -134,6 +132,19 @@ export default function Dashboard() {
   useEffect(() => {
     fetchDashboardData();
   }, [fetchDashboardData]);
+
+  // Action: Update Today's Window
+  const handleQuickWindow = async (payload) => {
+    setUpdatingWindow(true);
+    try {
+      await client.put('/settings/today', payload);
+      await fetchDashboardData();
+    } catch (err) {
+      console.error('[SEVA] Window update failed:', err);
+    } finally {
+      setUpdatingWindow(false);
+    }
+  };
 
   // Action: Generate Day Plan
   const handleGeneratePlan = async () => {
@@ -214,7 +225,7 @@ export default function Dashboard() {
           {generatingPlan ? (
             <>
               <div className="w-4 h-4 border-2 border-dark-bg border-t-transparent rounded-full animate-spin"></div>
-              <span>Generating Plan with Phi-3.5...</span>
+              <span>Generating Plan...</span>
             </>
           ) : (
             <>
@@ -233,6 +244,14 @@ export default function Dashboard() {
         </button>
 
         <button
+          onClick={() => navigate('/goals')}
+          className="px-4 py-2.5 bg-card-bg hover:bg-gray-800/80 text-text-primary border border-gray-700/80 font-medium text-sm rounded-xl transition-all flex items-center gap-2 cursor-pointer"
+        >
+          <CheckSquare size={18} className="text-accent" />
+          <span>Goals</span>
+        </button>
+
+        <button
           onClick={() => navigate('/chat')}
           className="px-4 py-2.5 bg-card-bg hover:bg-gray-800/80 text-text-primary border border-gray-700/80 font-medium text-sm rounded-xl transition-all flex items-center gap-2 cursor-pointer"
         >
@@ -240,6 +259,116 @@ export default function Dashboard() {
           <span>Open Chat</span>
         </button>
       </div>
+
+      {/* ── Today's Window Control ── */}
+      <div className="bg-card-bg border border-gray-800/90 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-accent/10 rounded-xl text-accent">
+            <Clock size={18} />
+          </div>
+          <div>
+            <div className="text-xs uppercase font-semibold text-text-secondary tracking-wider">Today's Window</div>
+            <div className="text-sm font-semibold text-text-primary">
+              {windowState?.done_for_day
+                ? 'Done for today'
+                : windowState?.window_set
+                ? `Now until ${windowState.window_end_time} (${windowState.remaining_minutes ?? 0} min left)`
+                : 'Not set yet — set when your day ends to generate a schedule'}
+            </div>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => handleQuickWindow({ window_end_time: '9:00 PM', done_for_day: false })}
+            disabled={updatingWindow}
+            className="px-3 py-1.5 text-xs font-medium bg-dark-bg hover:bg-gray-800 text-text-primary border border-gray-700 rounded-lg cursor-pointer transition-all"
+          >
+            Free till 9 PM
+          </button>
+          <button
+            onClick={() => handleQuickWindow({ window_end_time: '11:00 PM', done_for_day: false })}
+            disabled={updatingWindow}
+            className="px-3 py-1.5 text-xs font-medium bg-dark-bg hover:bg-gray-800 text-text-primary border border-gray-700 rounded-lg cursor-pointer transition-all"
+          >
+            Free till 11 PM
+          </button>
+          <button
+            onClick={() => handleQuickWindow({ available_minutes: 120, done_for_day: false })}
+            disabled={updatingWindow}
+            className="px-3 py-1.5 text-xs font-medium bg-dark-bg hover:bg-gray-800 text-text-primary border border-gray-700 rounded-lg cursor-pointer transition-all"
+          >
+            +2h
+          </button>
+          <button
+            onClick={() => handleQuickWindow({ done_for_day: true })}
+            disabled={updatingWindow}
+            className="px-3 py-1.5 text-xs font-medium bg-red-500/15 hover:bg-red-500/25 text-red-300 border border-red-500/30 rounded-lg cursor-pointer transition-all"
+          >
+            Done for today
+          </button>
+        </div>
+      </div>
+
+      {/* ── In-App Goal Reminders Banner (Hidden when empty) ── */}
+      {reminders.length > 0 && (
+        <div className="bg-card-bg border border-amber-500/30 rounded-2xl p-5 space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <AlertCircle size={18} className="text-amber-400" />
+              <h3 className="font-heading font-semibold text-base text-text-primary">
+                Goal Attention & Reminders ({reminders.length})
+              </h3>
+            </div>
+            <span className="text-[11px] text-text-secondary">
+              In-app reminders while SEVA is open (no push notifications)
+            </span>
+          </div>
+
+          <div className="space-y-2">
+            {reminders.map((rem) => {
+              const isUrgent = rem.level === 'urgent';
+              const isWarning = rem.level === 'warning';
+              return (
+                <div
+                  key={rem.goal_id}
+                  onClick={() => navigate('/goals')}
+                  className={`rounded-xl cursor-pointer transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${
+                    isUrgent
+                      ? 'p-3.5 bg-red-950/35 border border-red-500/40 hover:border-red-400'
+                      : isWarning
+                      ? 'p-2.5 bg-amber-950/25 border border-amber-500/30 hover:border-amber-400'
+                      : 'p-2.5 bg-dark-bg/70 border border-gray-800 hover:border-accent/40'
+                  }`}
+                >
+                  <div className="flex items-start sm:items-center gap-2.5 min-w-0">
+                    <span
+                      className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full shrink-0 ${
+                        isUrgent
+                          ? 'bg-red-500/20 text-red-300 border border-red-500/40'
+                          : isWarning
+                          ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                          : 'bg-accent/15 text-accent border border-accent/30'
+                      }`}
+                    >
+                      {rem.level}
+                    </span>
+                    <div className="min-w-0">
+                      <span className={`font-semibold text-text-primary ${isUrgent ? 'text-sm' : 'text-xs'}`}>
+                        {rem.title}
+                      </span>
+                      <p className="text-xs text-text-secondary mt-0.5">{rem.reason}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0 text-xs text-accent">
+                    <span>Open Goals</span>
+                    <ArrowRight size={13} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* ── Quick Stats Row (3 Cards) ── */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">

@@ -19,7 +19,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../database/db');
 const { getTodayDate } = require('../utils/dateUtils');
-const { importGoals, getAllGoals, computeGoalProgress } = require('../services/goalsService');
+const { importGoals, getAllGoals, getGoalReminders, computeGoalProgress } = require('../services/goalsService');
 
 // ─────────────────────────────────────────────────────────────
 // POST /api/goals/import
@@ -35,6 +35,27 @@ router.post('/import', (req, res) => {
     }
     console.error('❌ /api/goals/import error:', err.message);
     return res.status(500).json({ success: false, error: 'Import failed', details: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// GET /api/goals/reminders
+// Deterministic in-app reminders sorted urgent -> warning -> info,
+// then high -> medium -> low, max 6.
+// ─────────────────────────────────────────────────────────────
+router.get('/reminders', (req, res) => {
+  try {
+    const reminders = getGoalReminders(new Date());
+    return res.json({
+      success: true,
+      count: reminders.length,
+      in_app_only: true,
+      note: 'Reminders appear in-app when SEVA is open; there are no push notifications.',
+      reminders
+    });
+  } catch (err) {
+    console.error('❌ GET /api/goals/reminders error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to fetch goal reminders' });
   }
 });
 

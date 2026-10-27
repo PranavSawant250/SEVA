@@ -322,9 +322,122 @@ function setGoalSteps(goalId, stepTexts) {
   })();
 }
 
+// ─────────────────────────────────────────────────────────────
+// GET GOAL REMINDERS (Step 7 — deterministic, in-app only, no AI)
+// Rules:
+//  - progress_source === 'no_progress_data' skips behind-pace rules and
+//    gets an 'info' reminder: "No steps defined. Say 'steps for <goal>: a; b; c' or set progress manually."
+//  - deadline within 3 days with progress < 100, or is_overdue → 'urgent'
+//  - high priority and behind_by >= 10 → 'urgent'
+//  - medium priority and behind_by >= 20 → 'warning'
+//  - days_since_activity >= neglect_days → 'warning' ("No progress in N days")
+//  - low priority and behind_by >= 30 → 'info'
+// Sorted: urgent → warning → info, then high → medium → low, max 6.
+// ─────────────────────────────────────────────────────────────
+const LEVEL_RANK = { urgent: 1, warning: 2, info: 3 };
+const PRIO_RANK = { high: 1, medium: 2, low: 3 };
+
+function getGoalReminders(todayDateObj = new Date()) {
+  const prefs = db.prepare('SELECT neglect_days FROM preferences WHERE id = 1').get() || {};
+  const neglectDays = prefs.neglect_days ?? 3;
+  const activeGoals = getAllGoals(todayDateObj).filter(g => g.status === 'active' && g.progress < 100);
+
+  const reminders = [];
+
+  for (const g of activeGoals) {
+    const matchedRules = []; // { level, text }
+    const prio = (g.priority || 'medium').toLowerCase();
+    const isNoProgressData = g.progress_source === 'no_progress_data';
+
+    // 1. Deadline within 3 days with progress < 100, or is_overdue → 'urgent'
+    if (g.is_overdue) {
+      matchedRules.push({
+        level: 'urgent',
+        text: `Overdue (deadline ${g.deadline}) — ${g.progress}% complete`
+      });
+    } else if (g.days_left !== null && g.days_left <= 3 && g.progress < 100) {
+      matchedRules.push({
+        level: 'urgent',
+        text: `Deadline in ${g.days_left} day${g.days_left === 1 ? '' : 's'} (${g.deadline}) — ${g.progress}% complete`
+      });
+    }
+
+    // 2. Behind-pace rules (skipped when progress_source === 'no_progress_data')
+    if (!isNoProgressData) {
+      if (prio === 'high' && g.behind_by >= 10) {
+        matchedRules.push({
+          level: 'urgent',
+          text: `Behind pace by ${g.behind_by}% (${g.progress}% vs ${g.expected_progress}% expected)`
+        });
+      } else if (prio === 'medium' && g.behind_by >= 20) {
+        matchedRules.push({
+          level: 'warning',
+          text: `Behind pace by ${g.behind_by}% (${g.progress}% vs ${g.expected_progress}% expected)`
+        });
+      } else if (prio === 'low' && g.behind_by >= 30) {
+        matchedRules.push({
+          level: 'info',
+          text: `Behind pace by ${g.behind_by}% (${g.progress}% vs ${g.expected_progress}% expected)`
+        });
+      }
+    }
+
+    // 3. Neglect rule: days_since_activity >= neglect_days → 'warning'
+    if (g.days_since_activity >= neglectDays) {
+      matchedRules.push({
+        level: 'warning',
+        text: `No progress in ${g.days_since_activity} days`
+      });
+    }
+
+    // 4. Step-less milestone rule: progress_source === 'no_progress_data' → 'info'
+    if (isNoProgressData) {
+      matchedRules.push({
+        level: 'info',
+        text: `No steps defined. Say 'steps for ${g.title}: a; b; c' or set progress manually.`
+      });
+    }
+
+    if (matchedRules.length === 0) continue;
+
+    // Pick highest severity level for the goal and combine all triggered reasons
+    matchedRules.sort((a, b) => LEVEL_RANK[a.level] - LEVEL_RANK[b.level]);
+    const topLevel = matchedRules[0].level;
+    const combinedReason = matchedRules.map(r => r.text).join(' • ');
+
+    reminders.push({
+      goal_id: g.id,
+      title: g.title,
+      category: g.category,
+      priority: prio,
+      level: topLevel,
+      reason: combinedReason,
+      reasons: matchedRules.map(r => r.text),
+      progress: g.progress,
+      expected_progress: g.expected_progress,
+      behind_by: g.behind_by,
+      days_left: g.days_left,
+      is_overdue: g.is_overdue,
+      days_since_activity: g.days_since_activity,
+      progress_source: g.progress_source
+    });
+  }
+
+  reminders.sort((a, b) => {
+    const lDiff = (LEVEL_RANK[a.level] || 9) - (LEVEL_RANK[b.level] || 9);
+    if (lDiff !== 0) return lDiff;
+    const pDiff = (PRIO_RANK[a.priority] || 9) - (PRIO_RANK[b.priority] || 9);
+    if (pDiff !== 0) return pDiff;
+    return a.goal_id - b.goal_id;
+  });
+
+  return reminders.slice(0, 6);
+}
+
 module.exports = {
   importGoals,
   getAllGoals,
+  getGoalReminders,
   computeGoalProgress,
   inferGoalType,
   inferSteps,
