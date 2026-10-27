@@ -7,6 +7,7 @@ import Shell from './layouts/Shell';
 // Screens
 import Login        from './screens/Login';
 import Dashboard    from './screens/Dashboard';
+import Goals        from './screens/Goals';
 import EmailInsights from './screens/EmailInsights';
 import DayPlan      from './screens/DayPlan';
 import Chat         from './screens/Chat';
@@ -22,6 +23,7 @@ function App() {
         {/* ── Shell-wrapped screens ────────────────── */}
         <Route element={<Shell />}>
           <Route path="/dashboard"    element={<Dashboard />} />
+          <Route path="/goals"        element={<Goals />} />
           <Route path="/emails"       element={<EmailInsights />} />
           <Route path="/dayplan"      element={<DayPlan />} />
           <Route path="/chat"         element={<Chat />} />

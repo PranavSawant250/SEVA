@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import {
   LayoutDashboard,
+  Target,
   Mail,
   Calendar,
   MessageCircle,
@@ -13,6 +14,7 @@ import {
 
 const NAV_LINKS = [
   { to: '/dashboard',    label: 'Dashboard',      Icon: LayoutDashboard },
+  { to: '/goals',        label: 'Goals',          Icon: Target          },
   { to: '/emails',       label: 'Email Insights',  Icon: Mail            },
   { to: '/dayplan',      label: 'Day Plan',        Icon: Calendar        },
   { to: '/chat',         label: 'Chat',            Icon: MessageCircle   },
