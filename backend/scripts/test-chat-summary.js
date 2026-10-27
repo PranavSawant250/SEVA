@@ -7,10 +7,23 @@
  *   node scripts/test-chat-summary.js
  */
 
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const tempDbPath = path.join(os.tmpdir(), `seva-test-chatsummary-${process.pid}-${Date.now()}.db`);
+fs.copyFileSync(path.join(__dirname, '..', 'seva.db'), tempDbPath);
+process.env.SEVA_DB_PATH = tempDbPath;
+
 const { chatWithSeva } = require('../services/aiService');
 const { generateNightSummary } = require('../services/summaryService');
 const { getTodayDate } = require('../utils/dateUtils');
 const db = require('../database/db');
+process.on('exit', () => {
+  try { db.close(); } catch (_) {}
+  for (const s of ['', '-wal', '-shm']) {
+    try { if (fs.existsSync(tempDbPath + s)) fs.unlinkSync(tempDbPath + s); } catch (_) {}
+  }
+});
 
 async function main() {
   const today = getTodayDate();

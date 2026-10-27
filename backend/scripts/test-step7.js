@@ -14,8 +14,22 @@
  *  - Shows raw output of GET /api/goals/reminders and Night Summary's behind_pace_goals.
  */
 
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const tempDbPath = path.join(os.tmpdir(), `seva-test-step7-${process.pid}-${Date.now()}.db`);
+fs.copyFileSync(path.join(__dirname, '..', 'seva.db'), tempDbPath);
+process.env.SEVA_DB_PATH = tempDbPath;
+
 const assert = require('assert');
 const express = require('express');
+const db = require('../database/db');
+process.on('exit', () => {
+  try { db.close(); } catch (_) {}
+  for (const s of ['', '-wal', '-shm']) {
+    try { if (fs.existsSync(tempDbPath + s)) fs.unlinkSync(tempDbPath + s); } catch (_) {}
+  }
+});
 const goalsRouter = require('../routes/goals');
 const summaryRouter = require('../routes/summary');
 const { getGoalReminders } = require('../services/goalsService');
@@ -92,26 +106,36 @@ async function main() {
     }
   }
 
-  // Verify no_progress_data goals include the "No steps defined..." reminder and skip behind-pace rules
+  // Verify each goal appears at most once (strongest level only) and no_progress_data goals skip behind-pace rules
+  const seenGoalIds = new Set();
+  for (const r of reminders) {
+    assert(!seenGoalIds.has(r.goal_id), `Duplicate reminder entry for goal_id=${r.goal_id}`);
+    seenGoalIds.add(r.goal_id);
+  }
   const shellRem = reminders.find(r => r.title === 'Shell Scripting Lab');
   assert(shellRem, 'Shell Scripting Lab should appear in reminders');
-  assert(
-    shellRem.reason.includes("No steps defined. Say 'steps for Shell Scripting Lab: a; b; c' or set progress manually."),
-    'no_progress_data goal must include the No steps defined info message'
-  );
   assert(!shellRem.reason.includes('Behind pace'), 'no_progress_data goal must skip behind-pace rules');
 
-  // Also test on injected date 2026-10-27 where Shell Scripting Lab has days_left = 4 (>3) and days_since_activity = 1 (<3)
-  // so its level is strictly 'info'
+  // Test on injected date 2026-10-27 where Shell Scripting Lab has days_left = 4 (>3) and days_since_activity = 1 (<3)
+  // so its strongest level is strictly 'info' ("No steps defined...")
   const remOct27 = getGoalReminders(new Date(2026, 9, 27, 12, 0, 0));
   const shellOct27 = remOct27.find(r => r.title === 'Shell Scripting Lab');
   console.log('\n--- [2] Shell Scripting Lab Reminder on 2026-10-27 (days_left=4, no_progress_data) ---');
   console.log(JSON.stringify(shellOct27, null, 2));
   assert(shellOct27 && shellOct27.level === 'info', 'On 2026-10-27 Shell Scripting Lab should be level=info');
+  assert(
+    shellOct27.reason.includes("No steps defined. Say 'steps for Shell Scripting Lab: a; b; c' or set progress manually."),
+    'no_progress_data goal must include the No steps defined info message when info is its strongest level'
+  );
 
-  // Verify PostgreSQL + Spring Boot includes "No progress in N days"
+  // Verify PostgreSQL + Spring Boot has strongest level='urgent' (overdue) on 2026-10-28,
+  // and level='warning' ("No progress in N days") on 2026-10-14 before its 2026-10-20 deadline
   const pgRem = reminders.find(r => r.title === 'PostgreSQL + Spring Boot');
-  assert(pgRem && /No progress in \d+ days/.test(pgRem.reason), 'Neglected goal must include "No progress in N days"');
+  assert(pgRem && pgRem.level === 'urgent' && /Overdue/.test(pgRem.reason), 'Overdue goal has strongest level=urgent');
+  db.prepare(`UPDATE goals SET created_date = '2026-10-01' WHERE status = 'active'`).run();
+  const remOct14 = getGoalReminders(new Date(2026, 9, 14, 12, 0, 0), { uncapped: true });
+  const pgOct14 = remOct14.find(r => r.title === 'PostgreSQL + Spring Boot');
+  assert(pgOct14 && pgOct14.level === 'warning' && /No progress in \d+ days/.test(pgOct14.reason), 'On 2026-10-14 neglected step-less goal has level=warning ("No progress in N days")');
 
   // 2. Show raw output of Night Summary's behind_pace_goals
   const behindPace = getBehindPaceGoals(new Date(2026, 9, 27, 21, 0, 0));

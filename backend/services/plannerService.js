@@ -365,7 +365,7 @@ function gatherScheduleInputs(todayDateObj = new Date(), overrides = {}) {
       continue;
     }
 
-    if (t.date === today) {
+    if (t.date <= today) {
       flexibleTasks.push(t);
     }
   }

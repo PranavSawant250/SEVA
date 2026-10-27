@@ -61,7 +61,7 @@
  *   EXACTLY those step_ids — implemented in Step 5.
  */
 
-const { minutesToTimeString, parseTimeToMinutes, daysBetween } = require('../utils/dateUtils');
+const { minutesToTimeString, parseTimeToMinutes, daysBetween, computeDaysSinceActivity } = require('../utils/dateUtils');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ASSUMPTIONS (tunable constants)
@@ -98,8 +98,9 @@ const LAYER_RANK    = b => {
   if (b.source === 'forced') return 1;
   if (b.source === 'habit')  return 2;
   if (b.floor)               return 3;
-  if (b.source === 'goal')   return 4;
-  return 5;
+  if (b.source === 'flexible' && b.priority === 'high') return 4;
+  if (b.source === 'goal')   return 5;
+  return 6;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -165,7 +166,7 @@ function buildGoalBlock(goal, units) {
   };
 }
 
-function scoreGoals(goals, agingRate, agingCapDays) {
+function scoreGoals(goals, agingRate, agingCapDays, today) {
   return goals
     .filter(g => g.status === 'active' && g.goal_type !== 'frequency')
     .map(g => {
@@ -174,7 +175,7 @@ function scoreGoals(goals, agingRate, agingCapDays) {
       const rawDaysLeft       = g.days_left ?? 30;
       const effectiveDaysLeft = Math.max(1, g.is_overdue ? 1 : rawDaysLeft);
       const dailyNeed = isStepless(g) ? 1 : Math.ceil(remaining / effectiveDaysLeft);
-      const dsa   = g.days_since_activity || 0;
+      const dsa   = computeDaysSinceActivity(g, today);
       const aging = 1 + agingRate * Math.min(dsa, agingCapDays);
       const pw    = PRIORITY_WEIGHT[g.priority] || 2;
       const score = pw * (remaining / effectiveDaysLeft) * (1 + (g.behind_by || 0) / 100) * aging;
@@ -426,14 +427,15 @@ function allocateFlexibleWork({
   for (const item of forced) {
     if (isDuplicate(item.name)) continue;
     const dur = item.duration_min || MIN_BLOCK_MINS;
+    const minForced = item.goal_id != null ? dur : MIN_BLOCK_MINS;
     const base = { task: item.name, priority: item.priority || 'medium', source: 'forced', task_id: item.id ?? null, goal_id: item.goal_id ?? null, preferredStartMins: prefOf(item), ...(badPref(item) ? { placeEarliest: true } : {}) };
     if (fits(dur)) {
       addBlock({ ...base, duration: dur });
-    } else if (fits(MIN_BLOCK_MINS)) {
-      addBlock({ ...base, duration: MIN_BLOCK_MINS });
-      shrunk.push({ item: item.name, given: MIN_BLOCK_MINS, needed: dur, unit: 'min', reason: `budget tight; forced item shrunk to ${MIN_BLOCK_MINS}min` });
+    } else if (minForced < dur && fits(minForced)) {
+      addBlock({ ...base, duration: minForced });
+      shrunk.push({ item: item.name, given: minForced, needed: dur, unit: 'min', reason: `budget tight; forced item shrunk to ${minForced}min` });
     } else {
-      deferred.push({ item: item.name, goal_id: item.goal_id ?? null, task_id: item.id ?? null, reason: `no budget even at ${MIN_BLOCK_MINS} min minimum (have ${Math.max(0, remaining - bufCost())} min)` });
+      deferred.push({ item: item.name, goal_id: item.goal_id ?? null, task_id: item.id ?? null, _candidateBlock: { ...base, duration: dur }, min_needed: minForced, reason: `no budget for ${minForced} min minimum (have ${Math.max(0, remaining - bufCost())} min)` });
       warnings.push(`⚠️ Forced item "${item.name}" couldn't fit at minimum size.`);
     }
   }
@@ -448,16 +450,37 @@ function allocateFlexibleWork({
       dur = Math.max(MIN_BLOCK_MINS, Math.floor(MINS_HABIT_SESSION / 2));
       shrunk.push({ item: habit.title, given: dur, needed: MINS_HABIT_SESSION, unit: 'min', reason: 'heavy day — habit session halved' });
     }
+    const habitBlock = { task: `${habit.title}: session`, priority: 'medium', duration: dur, source: 'habit', goal_id: habit.id, task_id: null, preferredStartMins: runSlotStartMins };
     if (fits(dur)) {
-      addBlock({ task: `${habit.title}: session`, priority: 'medium', duration: dur, source: 'habit', goal_id: habit.id, task_id: null, preferredStartMins: runSlotStartMins });
+      addBlock(habitBlock);
     } else {
-      deferred.push({ item: habit.title, goal_id: habit.id ?? null, reason: `no budget for ${dur} min habit session (have ${Math.max(0, remaining - bufCost())} min)` });
+      deferred.push({ item: habit.title, goal_id: habit.id ?? null, _candidateBlock: habitBlock, min_needed: dur, reason: `no budget for ${dur} min habit session (have ${Math.max(0, remaining - bufCost())} min)` });
       warnings.push(`Habit "${habit.title}" skipped — not enough budget.`);
     }
   }
 
+  // ── LAYER 4a: HIGH-PRIORITY FLEXIBLE TASKS (manual + email-derived) ───────
+  // Placed after habits and BEFORE score-ranked goal work (medium/low stay after).
+  const highFlexTasks  = flexibleTasks.filter(t => (t.priority || 'medium') === 'high');
+  const otherFlexTasks = flexibleTasks.filter(t => (t.priority || 'medium') !== 'high');
+  for (const t of highFlexTasks) {
+    if (isDuplicate(t.name)) continue;
+    const dur = t.duration_min || DEFAULT_FLEX_MINS;
+    const block = {
+      task: String(t.name).trim(), priority: 'high', duration: dur,
+      source: 'flexible', origin: t.source || 'manual',
+      task_id: t.id ?? null, goal_id: t.goal_id ?? null, preferredStartMins: prefOf(t),
+      ...(badPref(t) ? { placeEarliest: true } : {})
+    };
+    if (fits(dur)) {
+      addBlock(block);
+    } else {
+      deferred.push({ item: block.task, task_id: t.id ?? null, _candidateBlock: block, min_needed: dur, reason: `no budget (needs ${dur} min, have ${Math.max(0, remaining - bufCost())} min)` });
+    }
+  }
+
   // ── Score active non-frequency goals once (highest score first) ───────────
-  const rows = scoreGoals(goals, agingRate, agingCapDays);
+  const rows = scoreGoals(goals, agingRate, agingCapDays, today);
   const eligibleCount = rows.length;
 
   // ── LAYER 4b: NEGLECT FLOOR (step-less milestone goals with dsa >= neglectDays)
@@ -468,7 +491,7 @@ function allocateFlexibleWork({
     for (const row of rows) {
       const goal = row._goal;
       if (goal.goal_type !== 'milestone' || !isStepless(goal)) continue;
-      const dsa = goal.days_since_activity || 0;
+      const dsa = computeDaysSinceActivity(goal, today);
       if (dsa < neglectDays) continue;
 
       row.is_floor_candidate = true;
@@ -554,8 +577,8 @@ function allocateFlexibleWork({
     row.minutes_given = block.duration;
   }
 
-  // ── LAYER 6: FLEXIBLE TASKS (manual + email-derived) ──────────────────────
-  for (const t of flexibleTasks) {
+  // ── LAYER 6: MEDIUM/LOW FLEXIBLE TASKS (manual + email-derived) ───────────
+  for (const t of otherFlexTasks) {
     if (isDuplicate(t.name)) continue;
     const dur = t.duration_min || DEFAULT_FLEX_MINS;
     const block = {
@@ -567,7 +590,7 @@ function allocateFlexibleWork({
     if (fits(dur)) {
       addBlock(block);
     } else {
-      deferred.push({ item: block.task, reason: `no budget (needs ${dur} min, have ${remaining - bufCost()} min)` });
+      deferred.push({ item: block.task, task_id: t.id ?? null, _candidateBlock: block, min_needed: dur, reason: `no budget (needs ${dur} min, have ${Math.max(0, remaining - bufCost())} min)` });
     }
   }
 
@@ -652,6 +675,7 @@ function buildDaySchedule({
 
   function shrinkToFit(block, avail) {
     if (block.floor) return avail >= FLOOR_MINS ? { ...block, duration: FLOOR_MINS } : null;
+    if (block.source === 'flexible') return avail >= block.duration ? block : null;
     const goal = block.source === 'goal' ? goalById.get(block.goal_id) : null;
     if (goal) {
       const units = isStepless(goal)
@@ -659,13 +683,16 @@ function buildDaySchedule({
         : Math.min(block.units, Math.floor(avail / unitMinutes(goal)));
       return units >= 1 ? buildGoalBlock(goal, units) : null;
     }
-    if (avail < MIN_BLOCK_MINS) return null;
+    const minReq = block.goal_id != null ? block.duration : MIN_BLOCK_MINS;
+    if (avail < minReq) return null;
     return { ...block, duration: Math.min(block.duration, avail) };
   }
   const minNeeded = block => {
     if (block.floor) return FLOOR_MINS;
+    if (block.source === 'flexible') return block.duration;
     const goal = block.source === 'goal' ? goalById.get(block.goal_id) : null;
-    return goal ? unitMinutes(goal) : MIN_BLOCK_MINS;
+    if (goal) return unitMinutes(goal);
+    return block.goal_id != null ? block.duration : MIN_BLOCK_MINS;
   };
 
   // ── A. Pin preferred-time blocks ──────────────────────────────────────────
@@ -703,15 +730,14 @@ function buildDaySchedule({
   let segments = buildSegments();
 
   function assignOn(segs, block) {
-    const ranked = segs.map(s => ({
-      s,
-      avail: segAvail(s, bufferMinutes),
-      raw:   segRawFree(s, bufferMinutes)
-    }));
+    const ranked = segs.map(s => {
+      const m = segMetrics(s, bufferMinutes);
+      return { s, avail: m.avail, raw: m.rawFree };
+    });
     const bySize = [...ranked].sort((a, b) => b.avail - a.avail || b.raw - a.raw);
     const best = bySize[0];
     const maxAvail = best ? best.avail : 0;
-    const maxRaw   = ranked.reduce((m, r) => Math.max(m, r.raw), 0);
+    const maxRaw   = best ? best.raw   : 0;
     const target = block.placeEarliest
       ? ranked.find(r => r.avail >= block.duration)
       : (best && best.avail >= block.duration ? best : null);
@@ -759,38 +785,53 @@ function buildDaySchedule({
     }
   }
 
-  // ── B2. Second chance for goals the budget pass deferred ─────────────────
+  // ── B2. Second chance for items the budget pass deferred ─────────────────
   // The budget pass charges a buffer per block; on the clock buffers only fall
   // between blocks in the same segment, so leftover gap time may still fit.
   for (const d of [...deferred]) {
     const goal = d.want_units ? goalById.get(d.goal_id) : null;
-    if (!goal) continue;
-    const row = rowById.get(goal.id);
-    const candidateBlock = d.floor
-      ? { task: buildGoalTaskText(goal, 1), priority: goal.priority, duration: FLOOR_MINS, source: 'goal', floor: true, goal_id: goal.id, task_id: null, units: 1, step_ids: [] }
-      : buildGoalBlock(goal, d.want_units);
-    const r = assign(candidateBlock);
-    const gapDesc = formatGapStats(r.maxRaw, r.maxAvail);
-    if (r.placed) {
-      deferred.splice(deferred.indexOf(d), 1);
-      row.limits = row.limits.filter(l => !l.startsWith('budget:'));
-      if (d.floor) {
-        const dsa = goal.days_since_activity || 0;
-        floorSessions.push({
-          item: goal.title, goal_id: goal.id,
-          duration: FLOOR_MINS, needed: MINS_STEPLESS_SESSION, days_since_activity: dsa,
-          reason: `short ${FLOOR_MINS}-min session to keep ${goal.title} moving (${dsa}d inactive)`
-        });
-      } else if (r.placed.units < d.want_units) {
-        const lim = `placement: leftover gap (${gapDesc}) fits ${r.placed.units} of ${d.want_units} unit(s)`;
-        row.limits.push(lim);
-        shrunk.push({ item: goal.title, goal_id: goal.id, given: r.placed.units, needed: d.want_units, unit: 'units', reason: lim });
+    if (goal) {
+      const row = rowById.get(goal.id);
+      const candidateBlock = d.floor
+        ? { task: buildGoalTaskText(goal, 1), priority: goal.priority, duration: FLOOR_MINS, source: 'goal', floor: true, goal_id: goal.id, task_id: null, units: 1, step_ids: [] }
+        : buildGoalBlock(goal, d.want_units);
+      const r = assign(candidateBlock);
+      const gapDesc = formatGapStats(r.maxRaw, r.maxAvail);
+      if (r.placed) {
+        deferred.splice(deferred.indexOf(d), 1);
+        row.limits = row.limits.filter(l => !l.startsWith('budget:'));
+        if (d.floor) {
+          const dsa = computeDaysSinceActivity(goal, today);
+          floorSessions.push({
+            item: goal.title, goal_id: goal.id,
+            duration: FLOOR_MINS, needed: MINS_STEPLESS_SESSION, days_since_activity: dsa,
+            reason: `short ${FLOOR_MINS}-min session to keep ${goal.title} moving (${dsa}d inactive)`
+          });
+        } else if (r.placed.units < d.want_units) {
+          const lim = `placement: leftover gap (${gapDesc}) fits ${r.placed.units} of ${d.want_units} unit(s)`;
+          row.limits.push(lim);
+          shrunk.push({ item: goal.title, goal_id: goal.id, given: r.placed.units, needed: d.want_units, unit: 'units', reason: lim });
+        }
+      } else {
+        const needMins = d.floor ? FLOOR_MINS : unitMinutes(goal);
+        d.reason = `no gap long enough (needs ${needMins} min, ${gapDesc})`;
+        row.limits = row.limits.filter(l => !l.startsWith('budget:'));
+        row.limits.push(`placement: ${d.reason}`);
       }
-    } else {
-      const needMins = d.floor ? FLOOR_MINS : unitMinutes(goal);
-      d.reason = `no gap long enough (needs ${needMins} min, ${gapDesc})`;
-      row.limits = row.limits.filter(l => !l.startsWith('budget:'));
-      row.limits.push(`placement: ${d.reason}`);
+    } else if (d._candidateBlock) {
+      const candidateBlock = d._candidateBlock;
+      delete d._candidateBlock;
+      const r = assign(candidateBlock);
+      const gapDesc = formatGapStats(r.maxRaw, r.maxAvail);
+      if (r.placed) {
+        deferred.splice(deferred.indexOf(d), 1);
+        if (r.shrunkFrom) {
+          shrunk.push({ item: candidateBlock.task, given: r.placed.duration, needed: r.shrunkFrom, unit: 'min', reason: `no gap long enough for ${r.shrunkFrom} min (${gapDesc})` });
+        }
+      } else {
+        const needMins = d.min_needed || candidateBlock.duration;
+        d.reason = `no gap long enough (needs ${needMins} min, ${gapDesc})`;
+      }
     }
   }
 
@@ -890,9 +931,11 @@ function buildDayOutline({
   const bufferSum  = Math.max(0, result.blocks.length - 1) * bufferMinutes;
   const budgetUsed = blockSum + bufferSum;
 
+  const cleanDeferred = result.deferred.map(({ _candidateBlock, ...rest }) => rest);
+
   return {
     today, fixedItems, freeBlocks, budgetUsed, budgetMinutes,
-    deferred: result.deferred, shrunk: result.shrunk, floorSessions: result.floorSessions,
+    deferred: cleanDeferred, shrunk: result.shrunk, floorSessions: result.floorSessions,
     warnings: result.warnings, duplicates: result.duplicates,
     behind_pace: result.behind_pace, scores: result.scores
   };

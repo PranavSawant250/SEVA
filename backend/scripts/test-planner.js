@@ -14,8 +14,21 @@
  * a day you don't mind overwriting the day_plans row, or restore after).
  */
 
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const tempDbPath = path.join(os.tmpdir(), `seva-test-planner-${process.pid}-${Date.now()}.db`);
+fs.copyFileSync(path.join(__dirname, '..', 'seva.db'), tempDbPath);
+process.env.SEVA_DB_PATH = tempDbPath;
+
 const ollama = require('ollama').default || require('ollama');
 const db = require('../database/db');
+process.on('exit', () => {
+  try { db.close(); } catch (_) {}
+  for (const s of ['', '-wal', '-shm']) {
+    try { if (fs.existsSync(tempDbPath + s)) fs.unlinkSync(tempDbPath + s); } catch (_) {}
+  }
+});
 
 const PREFERRED_MODEL = process.env.OLLAMA_MODEL || 'phi3.5';
 const ALLOWED_PRIORITIES = ['high', 'medium', 'low'];

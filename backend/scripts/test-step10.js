@@ -21,9 +21,22 @@
  *        (do NOT apply without approval)
  */
 
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const tempDbPath = path.join(os.tmpdir(), `seva-test-step10-${process.pid}-${Date.now()}.db`);
+fs.copyFileSync(path.join(__dirname, '..', 'seva.db'), tempDbPath);
+process.env.SEVA_DB_PATH = tempDbPath;
+
 const assert = require('assert');
 const express = require('express');
 const db = require('../database/db');
+process.on('exit', () => {
+  try { db.close(); } catch (_) {}
+  for (const s of ['', '-wal', '-shm']) {
+    try { if (fs.existsSync(tempDbPath + s)) fs.unlinkSync(tempDbPath + s); } catch (_) {}
+  }
+});
 const { routeCommand } = require('../services/chatCommands');
 const { matchesPlanTomorrowTrigger } = require('../services/nightlyService');
 const { generateDayPlan } = require('../services/plannerService');
@@ -159,6 +172,18 @@ async function main() {
   console.log('Tomorrow (2026-10-28) Plan Note:', planGenK.plan_note + '\n');
   assert(planGenK.plan.some(b => b.goal_id === 2), 'Scenario (k) forced PostgreSQL session must appear in tomorrow schedule');
   assert(planGenK.plan.some(b => b.task === 'Buy birthday gift' && b.duration === 45), 'Scenario (k) added Buy birthday gift must appear in tomorrow schedule');
+
+  const morningGoalTaskCounts = db.prepare(`
+    SELECT goal_id, date, COUNT(*) as row_count, GROUP_CONCAT(id) as task_ids, GROUP_CONCAT(name) as names
+    FROM tasks
+    WHERE date = ? AND goal_id IS NOT NULL
+    GROUP BY goal_id, date
+    ORDER BY goal_id ASC
+  `).all(tomorrowStr);
+  console.log('Morning tasks rows per goal after generate (2026-10-28):');
+  console.log(JSON.stringify(morningGoalTaskCounts, null, 2) + '\n');
+  assert(morningGoalTaskCounts.length > 0 && morningGoalTaskCounts.every(r => r.row_count === 1),
+    'Scenario (k) morning generate must NOT create duplicate goal task rows (row_count === 1 for every goal)');
 
   // Clean up tomorrow rows before Scenarios (g), (h), (i), (j)
   db.prepare(`DELETE FROM tasks WHERE date = ?`).run(tomorrowStr);

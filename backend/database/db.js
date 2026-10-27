@@ -1,8 +1,10 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 
-// Initialize SQLite database file in the backend folder
-const dbPath = path.join(__dirname, '..', 'seva.db');
+// Initialize SQLite database file in the backend folder (or override via SEVA_DB_PATH for isolated tests)
+const dbPath = process.env.SEVA_DB_PATH
+  ? path.resolve(process.env.SEVA_DB_PATH)
+  : path.join(__dirname, '..', 'seva.db');
 const db = new Database(dbPath);
 
 // Enable foreign key constraints & Write-Ahead Logging (WAL) mode for corruption resilience

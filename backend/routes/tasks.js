@@ -137,7 +137,7 @@ router.patch('/:id/complete', (req, res) => {
     }
 
     const task = db.prepare(`
-      SELECT id, name, date, completed, goal_id, source
+      SELECT id, name, date, completed, goal_id, source, duration_min
       FROM tasks
       WHERE id = ?
     `).get(taskId);
@@ -237,13 +237,17 @@ router.patch('/:id/complete', (req, res) => {
             SELECT id, step_text, done FROM goal_steps WHERE goal_id = ? ORDER BY id ASC
           `).all(goal.id);
 
-          if (steps.length === 0) {
-            // Step-less milestone: log 'worked', does not change progress
+          const isShorterThanFullUnit = task.duration_min != null && Number(task.duration_min) < 60;
+          if (steps.length === 0 || isShorterThanFullUnit) {
+            // Step-less milestone OR block shorter than 1 full unit (60m): log 'worked' only, do NOT tick steps
             db.prepare(`
               INSERT INTO goal_progress_log (goal_id, date, amount, note)
               VALUES (?, ?, 1, ?)
             `).run(goal.id, logDate, `worked:task:${taskId}`);
-            progressAction = { type: 'stepless_worked', note: 'worked' };
+            progressAction = {
+              type: isShorterThanFullUnit && steps.length > 0 ? 'partial_unit_worked' : 'stepless_worked',
+              note: 'worked'
+            };
           } else {
             const nextStep = steps.find(s => Number(s.done) === 0);
             if (nextStep) {

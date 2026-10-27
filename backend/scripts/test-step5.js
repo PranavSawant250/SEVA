@@ -13,9 +13,22 @@
 
 process.env.SKIP_AI_PLAN_NOTE = '1'; // deterministic fast note for scheduler tests; AI tested explicitly in #7
 
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const tempDbPath = path.join(os.tmpdir(), `seva-test-step5-${process.pid}-${Date.now()}.db`);
+fs.copyFileSync(path.join(__dirname, '..', 'seva.db'), tempDbPath);
+process.env.SEVA_DB_PATH = tempDbPath;
+
 const express = require('express');
 const http = require('http');
 const db = require('../database/db');
+process.on('exit', () => {
+  try { db.close(); } catch (_) {}
+  for (const s of ['', '-wal', '-shm']) {
+    try { if (fs.existsSync(tempDbPath + s)) fs.unlinkSync(tempDbPath + s); } catch (_) {}
+  }
+});
 const { parseTimeToMinutes } = require('../utils/dateUtils');
 const { assertNoOverlaps, buildDaySchedule } = require('../services/schedulerService');
 const { buildScheduleFromDb } = require('../services/plannerService');
@@ -169,11 +182,11 @@ async function main() {
     check(noWinRes.body.success === false && noWinRes.body.needs_window === true, 'Returns { success:false, needs_window:true } when window is unset');
     check(noWinRes.body.hint && noWinRes.body.hint.includes('5 hours'), 'Includes tonight_budget_hint when available_minutes exists');
 
-    // Set window end to 4:00 PM (960 mins) for SIM_DATE
+    // Set window end to 7:00 PM (1140 mins) for SIM_DATE so blocks fit both before and after 2-4 PM DSA Lab
     db.prepare(`
       INSERT INTO daily_settings (date, window_end_minutes, available_minutes, done_for_day)
-      VALUES (?, 960, 480, 0)
-      ON CONFLICT(date) DO UPDATE SET window_end_minutes = 960, done_for_day = 0
+      VALUES (?, 1140, 480, 0)
+      ON CONFLICT(date) DO UPDATE SET window_end_minutes = 1140, done_for_day = 0
     `).run(SIM_DATE);
 
     // Call GET /api/plan/generate THREE times

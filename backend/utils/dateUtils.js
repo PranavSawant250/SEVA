@@ -144,6 +144,28 @@ function daysBetween(startDateStr, endDateStr) {
   return Math.round((endMs - startMs) / (1000 * 60 * 60 * 24));
 }
 
+/**
+ * Shared computation for days_since_activity used across goalsService,
+ * schedulerService (scoring + neglect floor), and reminders.
+ * days_since_activity = days since the last log, else since created_date.
+ * Never returns 999 or negative values.
+ * @param {object} goalOrDates { last_log_date?, last_activity_date?, created_date?, days_since_activity? }
+ * @param {string} [todayDateStr] "YYYY-MM-DD"
+ * @returns {number}
+ */
+function computeDaysSinceActivity(goalOrDates, todayDateStr) {
+  if (!goalOrDates) return 0;
+  const anchor = goalOrDates.last_log_date || goalOrDates.last_activity_date || goalOrDates.created_date || null;
+  if (anchor && todayDateStr) {
+    return Math.max(0, daysBetween(anchor, todayDateStr));
+  }
+  if (typeof goalOrDates.days_since_activity === 'number' && !isNaN(goalOrDates.days_since_activity)) {
+    const val = Math.max(0, Math.floor(goalOrDates.days_since_activity));
+    return val >= 999 ? 0 : val;
+  }
+  return 0;
+}
+
 module.exports = {
   getTodayDate,
   getTodayDayOfWeek,
@@ -154,5 +176,6 @@ module.exports = {
   minutesToTimeString,
   getWeekMondayDate,
   getWeekSundayDate,
-  daysBetween
+  daysBetween,
+  computeDaysSinceActivity
 };

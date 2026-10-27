@@ -7,7 +7,7 @@
  */
 
 const db = require('../database/db');
-const { getTodayDate, getWeekMondayDate, getWeekSundayDate, daysBetween } = require('../utils/dateUtils');
+const { getTodayDate, getWeekMondayDate, getWeekSundayDate, daysBetween, computeDaysSinceActivity } = require('../utils/dateUtils');
 
 // ─────────────────────────────────────────────────────────────
 // REGEX CONSTANTS (documented assumptions)
@@ -199,14 +199,15 @@ function importGoals(payload, todayDate) {
 // todayDate is "YYYY-MM-DD", todayDateObj is the Date object for week calc.
 // ─────────────────────────────────────────────────────────────
 function computeGoalProgress(goal, todayDateStr, todayDateObj) {
-  // last_activity_date
+  // last_activity_date + shared computeDaysSinceActivity (never 999)
   const lastLog = db.prepare(
-    'SELECT date FROM goal_progress_log WHERE goal_id = ? ORDER BY date DESC LIMIT 1'
-  ).get(goal.id);
+    'SELECT date FROM goal_progress_log WHERE goal_id = ? AND date <= ? ORDER BY date DESC LIMIT 1'
+  ).get(goal.id, todayDateStr);
   const lastActivityDate = lastLog ? lastLog.date : goal.created_date;
-  const daysSinceActivity = lastActivityDate
-    ? Math.max(0, daysBetween(lastActivityDate, todayDateStr))
-    : 0;
+  const daysSinceActivity = computeDaysSinceActivity(
+    { last_log_date: lastLog ? lastLog.date : null, created_date: goal.created_date },
+    todayDateStr
+  );
   const lastLoggedToday = Boolean(
     db.prepare('SELECT 1 FROM goal_progress_log WHERE goal_id = ? AND date = ? LIMIT 1').get(goal.id, todayDateStr)
   );
@@ -220,9 +221,17 @@ function computeGoalProgress(goal, todayDateStr, todayDateObj) {
   let expectedProgress = 0;
   if (goal.deadline && daysBetween(todayDateStr, goal.deadline) <= 0) {
     expectedProgress = 100;
-  } else if (goal.created_date && goal.deadline) {
-    const totalDays = daysBetween(goal.created_date, goal.deadline);
-    const elapsedDays = daysBetween(goal.created_date, todayDateStr);
+  } else if (goal.deadline) {
+    const monthStart = `${goal.deadline.slice(0, 7)}-01`;
+    const paceStart = (
+      goal.created_date &&
+      daysBetween(goal.created_date, goal.deadline) > 0 &&
+      daysBetween(goal.created_date, todayDateStr) >= 0
+    )
+      ? goal.created_date
+      : monthStart;
+    const totalDays = daysBetween(paceStart, goal.deadline);
+    const elapsedDays = daysBetween(paceStart, todayDateStr);
     if (totalDays > 0) {
       expectedProgress = Math.min(100, Math.max(0, Math.round((elapsedDays / totalDays) * 100)));
     }
@@ -337,7 +346,8 @@ function setGoalSteps(goalId, stepTexts) {
 const LEVEL_RANK = { urgent: 1, warning: 2, info: 3 };
 const PRIO_RANK = { high: 1, medium: 2, low: 3 };
 
-function getGoalReminders(todayDateObj = new Date()) {
+function getGoalReminders(todayDateObj = new Date(), opts = {}) {
+  const todayStr = getTodayDate(todayDateObj);
   const prefs = db.prepare('SELECT neglect_days FROM preferences WHERE id = 1').get() || {};
   const neglectDays = prefs.neglect_days ?? 3;
   const activeGoals = getAllGoals(todayDateObj).filter(g => g.status === 'active' && g.progress < 100);
@@ -348,6 +358,7 @@ function getGoalReminders(todayDateObj = new Date()) {
     const matchedRules = []; // { level, text }
     const prio = (g.priority || 'medium').toLowerCase();
     const isNoProgressData = g.progress_source === 'no_progress_data';
+    const dsa = computeDaysSinceActivity(g, todayStr);
 
     // 1. Deadline within 3 days with progress < 100, or is_overdue → 'urgent'
     if (g.is_overdue) {
@@ -383,10 +394,10 @@ function getGoalReminders(todayDateObj = new Date()) {
     }
 
     // 3. Neglect rule: days_since_activity >= neglect_days → 'warning'
-    if (g.days_since_activity >= neglectDays) {
+    if (dsa >= neglectDays) {
       matchedRules.push({
         level: 'warning',
-        text: `No progress in ${g.days_since_activity} days`
+        text: `No progress in ${dsa} days`
       });
     }
 
@@ -400,10 +411,11 @@ function getGoalReminders(todayDateObj = new Date()) {
 
     if (matchedRules.length === 0) continue;
 
-    // Pick highest severity level for the goal and combine all triggered reasons
+    // One entry per goal, strongest level only
     matchedRules.sort((a, b) => LEVEL_RANK[a.level] - LEVEL_RANK[b.level]);
     const topLevel = matchedRules[0].level;
-    const combinedReason = matchedRules.map(r => r.text).join(' • ');
+    const strongestRules = matchedRules.filter(r => r.level === topLevel);
+    const combinedReason = strongestRules.map(r => r.text).join(' • ');
 
     reminders.push({
       goal_id: g.id,
@@ -412,13 +424,13 @@ function getGoalReminders(todayDateObj = new Date()) {
       priority: prio,
       level: topLevel,
       reason: combinedReason,
-      reasons: matchedRules.map(r => r.text),
+      reasons: strongestRules.map(r => r.text),
       progress: g.progress,
       expected_progress: g.expected_progress,
       behind_by: g.behind_by,
       days_left: g.days_left,
       is_overdue: g.is_overdue,
-      days_since_activity: g.days_since_activity,
+      days_since_activity: dsa,
       progress_source: g.progress_source
     });
   }
@@ -431,7 +443,7 @@ function getGoalReminders(todayDateObj = new Date()) {
     return a.goal_id - b.goal_id;
   });
 
-  return reminders.slice(0, 6);
+  return opts && opts.uncapped ? reminders : reminders.slice(0, 6);
 }
 
 module.exports = {
