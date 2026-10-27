@@ -10,6 +10,8 @@ import {
   Clock 
 } from 'lucide-react';
 import client from '../api/client';
+import MagicRings from '../components/MagicRings';
+import './Chat.css';
 
 export default function Chat() {
   const [loading, setLoading] = useState(true);
@@ -116,21 +118,42 @@ export default function Chat() {
     }
   };
 
-  // ── STATE 1: LOADING ──
-  if (loading) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-4">
-        <div className="w-10 h-10 border-2 border-accent border-t-transparent rounded-full animate-spin"></div>
-        <p className="font-sans text-sm text-text-secondary">Connecting to SEVA AI assistant...</p>
-      </div>
-    );
-  }
-
   return (
-    <div className="flex flex-col h-[calc(100vh-7rem)] max-w-5xl mx-auto pb-4">
-      
+    <div className="seva-chat-screen flex flex-col h-[calc(100vh-5rem)] max-w-5xl mx-auto">
+      {/* ── Animated MagicRings Background Layer ── */}
+      <div
+        className="seva-chat-bg"
+        style={{
+          width: '100%',
+          height: '100%',
+          position: 'absolute',
+        }}
+      >
+        <MagicRings
+          color="#A855F7"
+          colorTwo="#6366F1"
+          motion="pulse"
+          ringCount={6}
+          speed={1}
+          lineThickness={2}
+          glow={1}
+          hoverScale={1.2}
+          clickBurst={true}
+        />
+      </div>
+
+      {/* ── Foreground Chat Interface ── */}
+      <div className="seva-chat-content px-4 sm:px-6 pt-4 pb-4">
+        {/* ── STATE 1: LOADING ── */}
+        {loading ? (
+          <div className="flex flex-col items-center justify-center flex-1 min-h-[60vh] space-y-4">
+            <div className="w-10 h-10 border-2 border-accent border-t-transparent rounded-full animate-spin"></div>
+            <p className="font-sans text-sm text-text-secondary">Connecting to SEVA AI assistant...</p>
+          </div>
+        ) : (
+          <>
       {/* ── Chat Header ── */}
-      <div className="flex items-center justify-between border-b border-gray-800 pb-4 shrink-0">
+      <div className="seva-chat-header flex items-center justify-between border-b border-gray-800/80 pb-4 px-2 pt-1 rounded-t-xl shrink-0">
         <div className="flex items-center gap-3">
           <div className="p-2.5 bg-accent/10 border border-accent/30 rounded-xl text-accent">
             <MessageSquare size={24} style={{ filter: 'drop-shadow(0 0 6px rgba(0,217,255,0.5))' }} />
@@ -315,6 +338,9 @@ export default function Chat() {
         <p className="text-[10px] text-text-secondary text-center mt-2">
           SEVA AI reads your active day plan and emails to assist you. Responses take ~30–60s depending on local Ollama hardware.
         </p>
+      </div>
+          </>
+        )}
       </div>
 
     </div>

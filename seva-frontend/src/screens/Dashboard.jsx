@@ -195,7 +195,7 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="space-y-8 max-w-6xl pb-10">
+    <div className="space-y-8 max-w-6xl mx-auto pb-10">
       
       {/* ── Greeting & Date Header ── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-gray-800/80 pb-6">

@@ -13,6 +13,7 @@ import {
   BookOpen
 } from 'lucide-react';
 import client from '../api/client';
+import Galaxy from '../components/Galaxy';
 
 const DAYS_OF_WEEK = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
@@ -118,8 +119,31 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen bg-main-gradient flex items-center justify-center p-4 sm:p-6 font-sans">
-      <div className="w-full max-w-2xl bg-card-bg border border-gray-800/80 rounded-2xl shadow-2xl p-6 sm:p-10 backdrop-blur-md">
+    <div className="relative min-h-screen bg-main-gradient flex items-center justify-center p-4 sm:p-6 font-sans overflow-hidden">
+      {/* Full-screen Galaxy background */}
+      <div
+        className="chat-galaxy-background fixed inset-0 w-full h-full pointer-events-none z-0"
+        style={{
+          width: '100%',
+          height: '100%',
+          position: 'fixed',
+          inset: 0,
+          overflow: 'hidden',
+          pointerEvents: 'none',
+        }}
+        aria-hidden="true"
+      >
+        <Galaxy
+          density={1}
+          glowIntensity={0.3}
+          flareIntensity={1}
+          starSpeed={0.5}
+          mouseRepulsion
+          clickWarp
+        />
+      </div>
+
+      <div className="relative z-10 w-full max-w-2xl bg-card-bg border border-gray-800/80 rounded-2xl shadow-2xl p-6 sm:p-10 backdrop-blur-md">
         
         {/* Header Branding */}
         <div className="text-center space-y-2 mb-8">

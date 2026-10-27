@@ -11,6 +11,7 @@ import {
   ChevronRight,
   Zap,
 } from 'lucide-react';
+import Galaxy from '../components/Galaxy';
 
 const NAV_LINKS = [
   { to: '/dashboard',    label: 'Dashboard',      Icon: LayoutDashboard },
@@ -30,7 +31,7 @@ export default function Shell() {
       {/* ── Sidebar ───────────────────────────────────────────────── */}
       <aside
         className={`
-          relative flex flex-col flex-shrink-0
+          relative z-20 flex flex-col flex-shrink-0
           bg-navy border-r border-muted
           transition-all duration-300 ease-in-out
           ${collapsed ? 'w-16' : 'w-60'}
@@ -118,13 +119,39 @@ export default function Shell() {
       </aside>
 
       {/* ── Main Content Area ─────────────────────────────────────── */}
-      <main className="flex-1 overflow-y-auto min-w-0">
-        {/* Subtle top accent bar */}
-        <div className="h-px bg-gradient-to-r from-transparent via-accent/30 to-transparent" />
-        <div className="p-6 md:p-8">
-          <Outlet />
+      <div className="relative flex-1 flex flex-col h-screen overflow-hidden min-w-0">
+        {/* Full-screen Galaxy background across every screen */}
+        <div
+          className="chat-galaxy-background"
+          style={{
+            width: '100%',
+            height: '100%',
+            position: 'absolute',
+            inset: 0,
+            overflow: 'hidden',
+            pointerEvents: 'none',
+            zIndex: 0
+          }}
+          aria-hidden="true"
+        >
+          <Galaxy
+            density={1}
+            glowIntensity={0.3}
+            flareIntensity={1}
+            starSpeed={0.5}
+            mouseRepulsion
+            clickWarp
+          />
         </div>
-      </main>
+
+        <main className="relative z-10 flex-1 overflow-y-auto min-w-0">
+          {/* Subtle top accent bar */}
+          <div className="h-px bg-gradient-to-r from-transparent via-accent/30 to-transparent" />
+          <div className="p-6 md:p-8">
+            <Outlet />
+          </div>
+        </main>
+      </div>
     </div>
   );
 }

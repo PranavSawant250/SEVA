@@ -46,3 +46,23 @@ body {
 .transition-seva {
   transition: all 0.25s ease;
 }
+
+/* ─── Translucent Dark Glass Surfaces Over Animated Backgrounds ─── */
+.bg-card-bg {
+  background-color: rgba(10, 17, 40, 0.78);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.bg-dark-bg,
+.bg-dark-bg\/80,
+.bg-dark-bg\/70,
+.bg-dark-bg\/60 {
+  background-color: rgba(5, 11, 26, 0.78);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.text-dark-bg {
+  color: #050b1a;
+}
