@@ -417,7 +417,7 @@ function allocateFlexibleWork({
       addBlock({ ...base, duration: given });
       shrunk.push({ item: task.name, given, needed: dur, unit: 'min', reason: `budget tight; urgent block shrunk to ${given}min` });
     } else {
-      deferred.push({ item: task.name, reason: `no budget (needs ${dur} min, have ${remaining - bufCost()} min)` });
+      deferred.push({ item: task.name, goal_id: task.goal_id ?? null, task_id: task.id ?? null, reason: `no budget (needs ${dur} min, have ${Math.max(0, remaining - bufCost())} min)` });
       warnings.push(`⚠️ Urgent task "${task.name}" didn't fit — budget exhausted.`);
     }
   }
@@ -433,7 +433,7 @@ function allocateFlexibleWork({
       addBlock({ ...base, duration: MIN_BLOCK_MINS });
       shrunk.push({ item: item.name, given: MIN_BLOCK_MINS, needed: dur, unit: 'min', reason: `budget tight; forced item shrunk to ${MIN_BLOCK_MINS}min` });
     } else {
-      deferred.push({ item: item.name, reason: `no budget even at ${MIN_BLOCK_MINS} min minimum (have ${remaining - bufCost()} min)` });
+      deferred.push({ item: item.name, goal_id: item.goal_id ?? null, task_id: item.id ?? null, reason: `no budget even at ${MIN_BLOCK_MINS} min minimum (have ${Math.max(0, remaining - bufCost())} min)` });
       warnings.push(`⚠️ Forced item "${item.name}" couldn't fit at minimum size.`);
     }
   }
@@ -451,7 +451,7 @@ function allocateFlexibleWork({
     if (fits(dur)) {
       addBlock({ task: `${habit.title}: session`, priority: 'medium', duration: dur, source: 'habit', goal_id: habit.id, task_id: null, preferredStartMins: runSlotStartMins });
     } else {
-      deferred.push({ item: habit.title, reason: `no budget for ${dur} min habit session (have ${remaining - bufCost()} min)` });
+      deferred.push({ item: habit.title, goal_id: habit.id ?? null, reason: `no budget for ${dur} min habit session (have ${Math.max(0, remaining - bufCost())} min)` });
       warnings.push(`Habit "${habit.title}" skipped — not enough budget.`);
     }
   }

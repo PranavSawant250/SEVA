@@ -146,13 +146,25 @@ export default function Chat() {
           </div>
         </div>
 
-        <button
-          onClick={fetchChatHistory}
-          className="p-2 text-text-secondary hover:text-accent hover:bg-gray-800 rounded-xl transition-all"
-          title="Refresh history"
-        >
-          <RefreshCw size={16} />
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => handleSendMessage('plan tomorrow')}
+            disabled={isSending}
+            className="px-3.5 py-1.5 bg-accent/15 hover:bg-accent/25 text-accent border border-accent/30 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+            title="Start nightly check-in for tomorrow"
+          >
+            <Sparkles size={14} />
+            <span>Plan tomorrow</span>
+          </button>
+
+          <button
+            onClick={fetchChatHistory}
+            className="p-2 text-text-secondary hover:text-accent hover:bg-gray-800 rounded-xl transition-all"
+            title="Refresh history"
+          >
+            <RefreshCw size={16} />
+          </button>
+        </div>
       </div>
 
       {/* ── STATE 2: ERROR BANNER ── */}
@@ -189,10 +201,10 @@ export default function Chat() {
             
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-w-md w-full pt-2">
               {[
-                "What is my schedule for today?",
-                "Do I have any high priority tasks?",
-                "What's my 5 PM meeting about?",
-                "Summarize my email deadlines"
+                "plan tomorrow",
+                "how am I doing on my goals?",
+                "free till 9 PM",
+                "what should I focus on today?"
               ].map((suggestion, idx) => (
                 <button
                   key={idx}

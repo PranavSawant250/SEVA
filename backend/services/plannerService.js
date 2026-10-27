@@ -216,7 +216,7 @@ function persistGoalTasksForPlan(todayStr, planArray) {
 
   const tx = db.transaction(() => {
     for (const item of planArray) {
-      if (item.goal_id != null && (item.source === 'goal' || item.source === 'habit')) {
+      if (item.goal_id != null && (item.source === 'goal' || item.source === 'habit' || item.source === 'forced')) {
         const existing = findExistingStmt.get(item.goal_id, todayStr);
         if (existing) {
           updateExistingStmt.run(
@@ -303,8 +303,23 @@ function gatherScheduleInputs(todayDateObj = new Date(), overrides = {}) {
   // Read goals using the exact Step 2 getAllGoals() function
   const allGoals = overrides.allGoals || getAllGoals(dateObjForToday);
   const activeGoals = allGoals.filter(g => g.status === 'active');
-  const habitGoals = overrides.habitGoals || activeGoals.filter(g => g.goal_type === 'frequency');
-  const goals = overrides.goals || activeGoals.filter(g => g.goal_type !== 'frequency');
+
+  // Check if any goal tasks for today were explicitly forced in during last night's check-in (carry_forward = 1)
+  const forcedGoalRows = overrides.allGoals ? [] : db.prepare(`
+    SELECT id, name, priority, time_slot, source, completed, date, carry_forward,
+           goal_id, duration_min
+    FROM tasks
+    WHERE date = ? AND completed = 0 AND goal_id IS NOT NULL AND carry_forward = 1
+    ORDER BY id ASC
+  `).all(today);
+  const forcedGoalIdSet = new Set(forcedGoalRows.map(r => r.goal_id));
+
+  const habitGoals = overrides.habitGoals || activeGoals.filter(
+    g => g.goal_type === 'frequency' && !forcedGoalIdSet.has(g.id)
+  );
+  const goals = overrides.goals || activeGoals.filter(
+    g => g.goal_type !== 'frequency' && !forcedGoalIdSet.has(g.id)
+  );
 
   // Read incomplete non-goal tasks
   const rawTasks = db.prepare(`
@@ -319,7 +334,10 @@ function gatherScheduleInputs(todayDateObj = new Date(), overrides = {}) {
 
   const fixedTasks = [];
   const urgentTasks = [];
-  const forced = [...(overrides.forced || [])];
+  const forced = [
+    ...(overrides.forced || []),
+    ...forcedGoalRows
+  ];
   const flexibleTasks = [];
 
   for (const t of rawTasks) {

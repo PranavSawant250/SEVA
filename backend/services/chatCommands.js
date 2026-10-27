@@ -129,6 +129,11 @@ function handlePendingState(message, todayDate) {
   }
 
   if (state.type === 'checkin') {
+    // Allow explicit new session commands (remove goal/task or a fresh "plan tomorrow")
+    // to cancel the active check-in session and start the new session.
+    if (RE_REMOVE_GOAL.test(msg) || RE_REMOVE_TASK.test(msg) || RE_PLAN_TOMORROW.test(msg)) {
+      return null;
+    }
     // Check-in session is handled by nightlyService (Step 10)
     if (typeof state.onReply === 'function') {
       return state.onReply(msg, todayDate);
@@ -440,15 +445,15 @@ function initiateRemoval(type, query, todayStr) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// 7. "plan tomorrow" trigger (STUB — Step 10 fills this in)
+// 7. "plan tomorrow" trigger (Step 10 — wired to nightlyService)
 // ─────────────────────────────────────────────────────────────
 const RE_PLAN_TOMORROW = /\b(?:plan(?:\s+(?:my|for))?\s+tomorrow|tomorrow(?:'s)?\s+plan|raw\s+plan\s+for\s+tomorrow)\b/i;
 
 function handlePlanTomorrow(message, todayDate) {
   if (!RE_PLAN_TOMORROW.test(message)) return null;
-  const cancelNote = consumeActivePendingCancellationNotice();
-  // Step 10 will replace this stub with nightlyService.startNightlyCheckIn
-  return `${cancelNote}The nightly check-in (Step 10) is coming — not yet wired up.`;
+  const { startNightlyCheckIn } = require('./nightlyService');
+  const { reply } = startNightlyCheckIn(todayDate);
+  return reply;
 }
 
 // ─────────────────────────────────────────────────────────────
