@@ -67,18 +67,19 @@ function getTomorrowDayOfWeek(dateObj = new Date()) {
 }
 
 /**
- * Converts "H:MM AM/PM" to minutes since midnight.
+ * Converts "H:MM AM/PM", "H AM/PM", or "HAM/PM" to minutes since midnight.
  * Moved here from routes/timetable.js so the scheduler and other services
  * can use it without importing a route file.
- * @param {string} timeStr e.g. "9:00 AM", "1:30 PM"
+ * @param {string} timeStr e.g. "9AM", "9 AM", "9:00 AM", "3:30 PM"
  * @returns {number|null} Minutes since midnight, or null if unparseable
  */
 function parseTimeToMinutes(timeStr) {
   if (!timeStr || typeof timeStr !== 'string') return null;
-  const match = timeStr.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  const match = timeStr.trim().match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)$/i);
   if (!match) return null;
   let hour = parseInt(match[1], 10);
-  const minute = parseInt(match[2], 10);
+  const minute = match[2] !== undefined ? parseInt(match[2], 10) : 0;
+  if (hour < 1 || hour > 12 || minute < 0 || minute > 59) return null;
   const period = match[3].toUpperCase();
   if (period === 'AM' && hour === 12) hour = 0;
   if (period === 'PM' && hour !== 12) hour += 12;

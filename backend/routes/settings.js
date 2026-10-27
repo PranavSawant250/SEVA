@@ -33,11 +33,12 @@ function getNowMinutes() {
 
 function getTodayWindow(todayStr) {
   const todayRow = db.prepare('SELECT * FROM daily_settings WHERE date = ?').get(todayStr);
-  if (todayRow && todayRow.window_end_minutes !== null) {
+  if (todayRow && (todayRow.window_end_minutes !== null || todayRow.done_for_day === 1)) {
     return { source: 'today', ...todayRow };
   }
-  // Fall back to yesterday's window
-  const yd = getYesterdayDate();
+  // Fall back to yesterday's window (computed relative to todayStr, not system clock)
+  const [y, m, d] = todayStr.split('-').map(Number);
+  const yd = getYesterdayDate(new Date(y, m - 1, d));
   const ydRow = db.prepare('SELECT * FROM daily_settings WHERE date = ?').get(yd);
   if (ydRow && ydRow.window_end_minutes !== null) {
     return { source: 'yesterday', date: yd, window_end_minutes: ydRow.window_end_minutes, done_for_day: 0 };

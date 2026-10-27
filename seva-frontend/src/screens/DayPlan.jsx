@@ -7,14 +7,23 @@ import {
   CheckCircle2, 
   Circle, 
   AlertCircle, 
-  RefreshCw, 
   Zap, 
-  Tag, 
-  CheckSquare
+  CheckSquare,
+  Sliders,
+  Info,
+  AlertTriangle
 } from 'lucide-react';
 import client from '../api/client';
 import AddTaskModal from '../components/AddTaskModal';
 import { getPriorityBadgeClass } from '../utils/themeUtils';
+
+function getLocalTodayStr() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
 
 export default function DayPlan() {
   const [loading, setLoading] = useState(true);
@@ -22,9 +31,22 @@ export default function DayPlan() {
   
   // Data States
   const [planItems, setPlanItems] = useState([]);
-  const [tasks, setTasks] = useState([]); // Real tasks table items for cross-referencing IDs
+  const [tasks, setTasks] = useState([]);
   const [hasPlan, setHasPlan] = useState(false);
   const [todayDate, setTodayDate] = useState('');
+  const [deferredItems, setDeferredItems] = useState([]);
+  const [shrunkItems, setShrunkItems] = useState([]);
+  const [floorSessions, setFloorSessions] = useState([]);
+  const [warnings, setWarnings] = useState([]);
+  const [planNote, setPlanNote] = useState('');
+
+  // Window States
+  const [windowState, setWindowState] = useState(null);
+  const [needsWindow, setNeedsWindow] = useState(false);
+  const [windowPromptMsg, setWindowPromptMsg] = useState('');
+  const [windowHint, setWindowHint] = useState('');
+  const [windowInput, setWindowInput] = useState('');
+  const [savingWindow, setSavingWindow] = useState(false);
 
   // UI Action States
   const [generatingPlan, setGeneratingPlan] = useState(false);
@@ -33,17 +55,28 @@ export default function DayPlan() {
   const [replanning, setReplanning] = useState(false);
   const [replanMsg, setReplanMsg] = useState('');
 
-  // Fetch Day Plan & Real Tasks
+  // Fetch Day Plan, Real Tasks & Window Settings
   const fetchPlanAndTasks = useCallback(async () => {
     setErrorMsg('');
     try {
-      // 1. Fetch real tasks table to map task names -> task IDs
-      const tasksRes = await client.get('/tasks');
+      const [tasksRes, planRes, winRes] = await Promise.all([
+        client.get('/tasks'),
+        client.get('/plan/today'),
+        client.get('/settings/today').catch(() => ({ data: null }))
+      ]);
+
       const realTasks = tasksRes.data.tasks || [];
       setTasks(realTasks);
 
-      // 2. Fetch Day Plan
-      const planRes = await client.get('/plan/today');
+      if (winRes && winRes.data && winRes.data.success) {
+        setWindowState(winRes.data);
+        setNeedsWindow(!winRes.data.window_set);
+        if (!winRes.data.window_set && winRes.data.tonight_budget_hint) {
+          const hrs = +(winRes.data.tonight_budget_hint / 60).toFixed(1);
+          setWindowHint(`Last night you planned about ${hrs} hours (${winRes.data.tonight_budget_hint} min).`);
+        }
+      }
+
       if (planRes.data.success && Array.isArray(planRes.data.plan) && planRes.data.plan.length > 0) {
         setHasPlan(true);
         setPlanItems(planRes.data.plan);
@@ -54,7 +87,6 @@ export default function DayPlan() {
         setHasPlan(false);
         setPlanItems([]);
       }
-
     } catch (err) {
       console.error('[SEVA] Day plan fetch error:', err);
       setErrorMsg('Unable to fetch your day plan from backend server.');
@@ -67,13 +99,25 @@ export default function DayPlan() {
     fetchPlanAndTasks();
   }, [fetchPlanAndTasks]);
 
-  // Helper: Find matching task row ID for a plan item name scoped to TODAY's date
-  const findMatchingTask = (planTaskName) => {
+  // Helper: Find matching task row for a plan item (task_id first, then name fallback)
+  const findMatchingTask = (planItem) => {
+    if (!planItem) return null;
+    if (typeof planItem === 'object' && planItem.task_id != null) {
+      const byId = tasks.find(t => Number(t.id) === Number(planItem.task_id));
+      if (byId) return byId;
+      return {
+        id: planItem.task_id,
+        name: planItem.task,
+        completed: planItem.completed ? 1 : 0,
+        goal_id: planItem.goal_id || null
+      };
+    }
+
+    const planTaskName = typeof planItem === 'string' ? planItem : planItem.task;
     if (!planTaskName) return null;
     const cleanPlanName = planTaskName.trim().toLowerCase();
-    const targetDate = todayDate || new Date().toISOString().split('T')[0];
+    const targetDate = todayDate || getLocalTodayStr();
 
-    // 1. Candidate tasks scoped to TODAY's date
     const todayTasks = tasks.filter(t => t.date === targetDate);
     let match = todayTasks.find(t => {
       if (!t.name) return false;
@@ -81,7 +125,6 @@ export default function DayPlan() {
       return tClean === cleanPlanName || tClean.includes(cleanPlanName) || cleanPlanName.includes(tClean);
     });
 
-    // 2. Fallback: candidate active incomplete tasks (completed = 0) with date <= today
     if (!match) {
       const activeIncompleteTasks = tasks.filter(t => t.completed === 0 && t.date <= targetDate);
       match = activeIncompleteTasks.find(t => {
@@ -94,11 +137,14 @@ export default function DayPlan() {
     return match || null;
   };
 
-  // Action: Toggle Task Completion
+  // Action: Toggle Task Completion (uses task_id first, name fallback second)
   const handleToggleComplete = async (planItem) => {
-    let matchedTask = findMatchingTask(planItem.task);
-    
-    // If no task row exists for this plan item (e.g. surprise event), create one dynamically
+    if (planItem.source === 'fixed' && !planItem.task_id) {
+      return;
+    }
+
+    let matchedTask = findMatchingTask(planItem);
+
     if (!matchedTask) {
       try {
         const createRes = await client.post('/tasks', {
@@ -115,48 +161,69 @@ export default function DayPlan() {
       }
     }
 
-    if (!matchedTask) {
+    if (!matchedTask || matchedTask.id == null) {
       alert(`Unable to update completion for "${planItem.task}".`);
       return;
     }
 
-    const newCompletedStatus = matchedTask.completed === 1 ? 0 : 1;
-    
+    const newCompletedStatus = Number(matchedTask.completed) === 1 ? 0 : 1;
+
     // Optimistic UI update
     setTasks(prev => {
-      const exists = prev.some(t => t.id === matchedTask.id);
+      const exists = prev.some(t => Number(t.id) === Number(matchedTask.id));
       if (exists) {
-        return prev.map(t => t.id === matchedTask.id ? { ...t, completed: newCompletedStatus } : t);
-      } else {
-        return [...prev, { ...matchedTask, completed: newCompletedStatus }];
+        return prev.map(t => Number(t.id) === Number(matchedTask.id) ? { ...t, completed: newCompletedStatus } : t);
       }
+      return [...prev, { ...matchedTask, completed: newCompletedStatus }];
     });
+    setPlanItems(prev =>
+      prev.map(item =>
+        (item.task_id != null && Number(item.task_id) === Number(matchedTask.id))
+          ? { ...item, completed: newCompletedStatus }
+          : item
+      )
+    );
 
     try {
       await client.patch(`/tasks/${matchedTask.id}/complete`, { completed: newCompletedStatus });
-      await fetchPlanAndTasks(); // Re-sync state
+      await fetchPlanAndTasks();
     } catch (err) {
       console.error('[SEVA] Toggle completion error:', err);
       alert('Failed to update task completion status.');
-      await fetchPlanAndTasks(); // Revert on failure
+      await fetchPlanAndTasks();
     }
   };
 
-  // Action: Generate / Regenerate Plan
-  const handleGeneratePlan = async (isRegenerate = false) => {
-    if (isRegenerate) {
-      const confirmRegen = window.confirm('This will replace your existing day plan with a fresh AI-generated schedule. Continue?');
-      if (!confirmRegen) return;
+  const applyScheduleResponse = async (data) => {
+    if (data.plan) {
+      setPlanItems(data.plan);
+      setHasPlan(data.plan.length > 0);
     }
+    if (data.date) setTodayDate(data.date);
+    setDeferredItems(Array.isArray(data.deferred) ? data.deferred : []);
+    setShrunkItems(Array.isArray(data.shrunk) ? data.shrunk : []);
+    setFloorSessions(Array.isArray(data.floorSessions) ? data.floorSessions : []);
+    setWarnings(Array.isArray(data.warnings) ? data.warnings : []);
+    setPlanNote(data.plan_note || '');
+    setNeedsWindow(false);
+    setWindowPromptMsg('');
+    await fetchPlanAndTasks();
+  };
 
+  // Action: Generate / Regenerate Plan
+  const handleGeneratePlan = async () => {
     setGeneratingPlan(true);
     setErrorMsg('');
     try {
       const res = await client.get('/plan/generate');
       if (res.data.success) {
-        await fetchPlanAndTasks();
+        await applyScheduleResponse(res.data);
+      } else if (res.data.needs_window) {
+        setNeedsWindow(true);
+        setWindowPromptMsg(res.data.message || 'No daily window is set. Tell SEVA your free window first.');
+        setWindowHint(res.data.hint || '');
       } else {
-        setErrorMsg(res.data.error || 'Failed to generate plan.');
+        setErrorMsg(res.data.message || res.data.error || 'Failed to generate plan.');
       }
     } catch (err) {
       console.error('[SEVA] Generate plan error:', err);
@@ -164,6 +231,49 @@ export default function DayPlan() {
     } finally {
       setGeneratingPlan(false);
     }
+  };
+
+  // Action: Set Window from Quick Input or Preset Button
+  const handleSetWindow = async (payload) => {
+    setSavingWindow(true);
+    setErrorMsg('');
+    try {
+      const putRes = await client.put('/settings/today', payload);
+      if (putRes.data.success) {
+        setWindowInput('');
+        setNeedsWindow(false);
+        setWindowPromptMsg('');
+        await handleGeneratePlan();
+      } else {
+        setErrorMsg(putRes.data.error || 'Could not update window.');
+      }
+    } catch (err) {
+      setErrorMsg(err.response?.data?.error || err.message || 'Failed to update today window.');
+    } finally {
+      setSavingWindow(false);
+    }
+  };
+
+  const handleQuickWindowSubmit = async (e) => {
+    e.preventDefault();
+    const raw = windowInput.trim();
+    if (!raw) return;
+
+    // Parse "4 hours", "90 minutes", or "9:00 PM" / "9 PM"
+    const durMatch = raw.match(/^(\d+(?:\.\d+)?)\s*(hours?|hrs?|h|minutes?|mins?|m)$/i);
+    if (durMatch) {
+      const val = parseFloat(durMatch[1]);
+      const unit = durMatch[2].toLowerCase();
+      const mins = unit.startsWith('h') ? Math.round(val * 60) : Math.round(val);
+      await handleSetWindow({ available_minutes: mins, done_for_day: false });
+      return;
+    }
+
+    let timeStr = raw;
+    if (/^\d{1,2}\s*(AM|PM)$/i.test(timeStr)) {
+      timeStr = timeStr.replace(/^(\d{1,2})\s*(AM|PM)$/i, '$1:00 $2');
+    }
+    await handleSetWindow({ window_end_time: timeStr.toUpperCase(), done_for_day: false });
   };
 
   // Action: Replan Surprise Event
@@ -177,14 +287,14 @@ export default function DayPlan() {
       const res = await client.post('/plan/replan', { surpriseEvent: replanText.trim() });
       if (res.data.success) {
         setReplanText('');
-        setReplanMsg('Plan successfully updated with your surprise event!');
-        await fetchPlanAndTasks();
+        setReplanMsg('Plan updated around your surprise event!');
+        await applyScheduleResponse(res.data);
       } else {
-        alert(res.data.error || 'Replan failed.');
+        setErrorMsg(res.data.error || 'Replan failed.');
       }
     } catch (err) {
       console.error('[SEVA] Replan error:', err);
-      alert('Replan failed: ' + (err.response?.data?.error || err.message));
+      setErrorMsg('Replan failed: ' + (err.response?.data?.error || err.message));
     } finally {
       setReplanning(false);
     }
@@ -193,8 +303,8 @@ export default function DayPlan() {
   // Progress Bar Calculation
   const totalItems = planItems.length;
   const completedCount = planItems.filter(item => {
-    const matched = findMatchingTask(item.task);
-    return matched && matched.completed === 1;
+    const matched = findMatchingTask(item);
+    return matched && Number(matched.completed) === 1;
   }).length;
   const progressPercent = totalItems > 0 ? Math.round((completedCount / totalItems) * 100) : 0;
 
@@ -202,6 +312,16 @@ export default function DayPlan() {
   const getSourceBadgeClass = (source) => {
     const s = (source || 'manual').toLowerCase();
     switch (s) {
+      case 'goal':
+        return 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/30';
+      case 'habit':
+        return 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30';
+      case 'urgent':
+        return 'bg-red-500/15 text-red-400 border border-red-500/30';
+      case 'forced':
+        return 'bg-indigo-500/15 text-indigo-400 border border-indigo-500/30';
+      case 'fixed':
+        return 'bg-slate-700/40 text-slate-300 border border-slate-600/50';
       case 'email':
         return 'bg-purple-500/15 text-purple-400 border border-purple-500/30';
       case 'carry_forward':
@@ -213,7 +333,6 @@ export default function DayPlan() {
     }
   };
 
-  // ── STATE 1: LOADING ──
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-4">
@@ -224,7 +343,7 @@ export default function DayPlan() {
   }
 
   return (
-    <div className="space-y-8 max-w-5xl pb-10">
+    <div className="space-y-6 max-w-5xl pb-10">
       
       {/* ── Page Header & Controls ── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-gray-800 pb-6">
@@ -234,7 +353,7 @@ export default function DayPlan() {
           </div>
           <div>
             <h1 className="font-heading font-bold text-3xl text-text-primary">Day Plan Timeline</h1>
-            <p className="text-text-secondary text-xs mt-0.5">Hour-by-hour structured schedule for today</p>
+            <p className="text-text-secondary text-xs mt-0.5">Deterministic goal-aware schedule for today</p>
           </div>
         </div>
 
@@ -249,7 +368,7 @@ export default function DayPlan() {
           </button>
 
           <button
-            onClick={() => handleGeneratePlan(hasPlan)}
+            onClick={() => handleGeneratePlan()}
             disabled={generatingPlan}
             className="px-4 py-2 bg-accent hover:bg-accent/90 text-dark-bg font-heading font-semibold text-xs rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-lg shadow-accent/20 disabled:opacity-50"
           >
@@ -259,7 +378,88 @@ export default function DayPlan() {
         </div>
       </div>
 
-      {/* ── STATE 2: ERROR ── */}
+      {/* ── Today's Window Control / Window Not Set Prompt ── */}
+      <div className={`rounded-2xl p-5 border space-y-3 ${
+        needsWindow
+          ? 'bg-amber-950/30 border-amber-500/50'
+          : 'bg-card-bg border-gray-800'
+      }`}>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-xs font-semibold text-text-primary">
+            <Sliders size={16} className={needsWindow ? 'text-amber-400' : 'text-accent'} />
+            <span>
+              {needsWindow
+                ? 'Daily Window Not Set'
+                : windowState?.done_for_day
+                  ? 'Marked as Done for Today'
+                  : `Today's Window: until ${windowState?.window_end_time || 'set time'}`}
+            </span>
+          </div>
+          {windowState?.window_set && !windowState?.done_for_day && (
+            <span className="text-[11px] font-mono text-accent">
+              {windowState.remaining_minutes} min remaining ({windowState.source})
+            </span>
+          )}
+        </div>
+
+        {(needsWindow || windowPromptMsg) && (
+          <p className="text-xs text-amber-300">
+            {windowPromptMsg || 'Tell SEVA when your free window ends today (e.g. "9:00 PM" or "4 hours") so your schedule can be built without assuming a bedtime.'}
+            {windowHint ? ` ${windowHint}` : ''}
+          </p>
+        )}
+
+        <form onSubmit={handleQuickWindowSubmit} className="flex flex-wrap items-center gap-2">
+          <input
+            type="text"
+            placeholder='e.g. "9:00 PM" or "4 hours" or "90 minutes"'
+            value={windowInput}
+            onChange={(e) => setWindowInput(e.target.value)}
+            className="flex-1 min-w-[200px] bg-dark-bg border border-gray-700/80 rounded-xl px-3.5 py-2 text-xs text-text-primary focus:outline-none focus:border-accent"
+          />
+          <button
+            type="submit"
+            disabled={savingWindow || !windowInput.trim()}
+            className="px-3.5 py-2 bg-accent hover:bg-accent/90 text-dark-bg font-heading font-semibold text-xs rounded-xl transition-all cursor-pointer disabled:opacity-50"
+          >
+            {savingWindow ? 'Saving...' : 'Set Window & Plan'}
+          </button>
+          <button
+            type="button"
+            disabled={savingWindow}
+            onClick={() => handleSetWindow({ available_minutes: 120, done_for_day: false })}
+            className="px-2.5 py-2 bg-dark-bg hover:bg-gray-800 text-text-secondary hover:text-text-primary border border-gray-700 rounded-xl text-xs cursor-pointer"
+          >
+            +2h
+          </button>
+          <button
+            type="button"
+            disabled={savingWindow}
+            onClick={() => handleSetWindow({ available_minutes: 240, done_for_day: false })}
+            className="px-2.5 py-2 bg-dark-bg hover:bg-gray-800 text-text-secondary hover:text-text-primary border border-gray-700 rounded-xl text-xs cursor-pointer"
+          >
+            +4h
+          </button>
+          <button
+            type="button"
+            disabled={savingWindow}
+            onClick={() => handleSetWindow({ window_end_time: '9:00 PM', done_for_day: false })}
+            className="px-2.5 py-2 bg-dark-bg hover:bg-gray-800 text-text-secondary hover:text-text-primary border border-gray-700 rounded-xl text-xs cursor-pointer"
+          >
+            Till 9 PM
+          </button>
+          <button
+            type="button"
+            disabled={savingWindow}
+            onClick={() => handleSetWindow({ done_for_day: true })}
+            className="px-2.5 py-2 bg-rose-950/40 hover:bg-rose-900/40 text-rose-300 border border-rose-500/30 rounded-xl text-xs cursor-pointer"
+          >
+            Done for today
+          </button>
+        </form>
+      </div>
+
+      {/* ── ERROR ALERT ── */}
       {errorMsg && (
         <div className="p-4 bg-red-950/40 border border-red-500/50 rounded-xl flex items-center justify-between gap-3 text-red-400 text-xs">
           <div className="flex items-center gap-2">
@@ -272,6 +472,32 @@ export default function DayPlan() {
           >
             Retry
           </button>
+        </div>
+      )}
+
+      {/* ── Plan Note & Warnings ── */}
+      {planNote && (
+        <div className="p-4 bg-accent/10 border border-accent/30 rounded-2xl flex items-start gap-3 text-xs text-text-primary">
+          <Info size={16} className="text-accent shrink-0 mt-0.5" />
+          <div className="space-y-1">
+            <p className="font-medium leading-relaxed">{planNote}</p>
+            {floorSessions.length > 0 && (
+              <p className="text-cyan-300 text-[11px]">
+                Neglect Floor: {floorSessions.map(f => `${f.item} (${f.duration} min)`).join(', ')}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {warnings.length > 0 && (
+        <div className="p-4 bg-amber-950/30 border border-amber-500/40 rounded-2xl space-y-1.5 text-xs text-amber-300">
+          {warnings.map((w, i) => (
+            <div key={i} className="flex items-start gap-2">
+              <AlertTriangle size={14} className="shrink-0 mt-0.5 text-amber-400" />
+              <span>{w}</span>
+            </div>
+          ))}
         </div>
       )}
 
@@ -296,78 +522,75 @@ export default function DayPlan() {
       )}
 
       {/* ── Replan Surprise Event Form ── */}
-      {hasPlan && (
-        <form onSubmit={handleReplan} className="bg-card-bg/60 border border-gray-800/80 rounded-2xl p-5 space-y-3">
-          <div className="flex items-center gap-2 text-xs font-semibold text-accent">
-            <Zap size={16} />
-            <span>Surprise Event Replan</span>
+      <form onSubmit={handleReplan} className="bg-card-bg/60 border border-gray-800/80 rounded-2xl p-5 space-y-3">
+        <div className="flex items-center gap-2 text-xs font-semibold text-accent">
+          <Zap size={16} />
+          <span>Surprise Event Replan</span>
+        </div>
+        <p className="text-text-secondary text-xs">
+          Got an unexpected meeting, viva, or urgent event? Enter it below to insert it as a fixed block and recalculate the rest of your window.
+        </p>
+
+        {replanMsg && (
+          <div className="text-xs text-emerald-400 font-medium bg-emerald-500/10 p-2.5 rounded-lg border border-emerald-500/30">
+            {replanMsg}
           </div>
-          <p className="text-text-secondary text-xs">
-            Got an unexpected meeting, urgent call, or substitute class right now? Type it below to instantly recalculate your day plan around it.
-          </p>
+        )}
 
-          {replanMsg && (
-            <div className="text-xs text-emerald-400 font-medium bg-emerald-500/10 p-2.5 rounded-lg border border-emerald-500/30">
-              {replanMsg}
-            </div>
-          )}
+        <div className="flex items-center gap-3">
+          <input
+            type="text"
+            placeholder="e.g., Surprise viva with Professor Rathod at 3:30 PM"
+            value={replanText}
+            onChange={(e) => setReplanText(e.target.value)}
+            className="flex-1 bg-dark-bg border border-gray-700/80 rounded-xl px-3.5 py-2 text-xs text-text-primary focus:outline-none focus:border-accent"
+          />
+          <button
+            type="submit"
+            disabled={replanning || !replanText.trim()}
+            className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent border border-accent/40 font-heading font-semibold text-xs rounded-xl transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0"
+          >
+            <Zap size={14} className={replanning ? 'animate-spin' : ''} />
+            <span>{replanning ? 'Replanning...' : 'Replan Day'}</span>
+          </button>
+        </div>
+      </form>
 
-          <div className="flex items-center gap-3">
-            <input
-              type="text"
-              placeholder="e.g., Surprise meeting with HOD right now at 3:30 PM"
-              value={replanText}
-              onChange={(e) => setReplanText(e.target.value)}
-              className="flex-1 bg-dark-bg border border-gray-700/80 rounded-xl px-3.5 py-2 text-xs text-text-primary focus:outline-none focus:border-accent"
-            />
-            <button
-              type="submit"
-              disabled={replanning || !replanText.trim()}
-              className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent border border-accent/40 font-heading font-semibold text-xs rounded-xl transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0"
-            >
-              <Zap size={14} className={replanning ? 'animate-spin' : ''} />
-              <span>{replanning ? 'Replanning...' : 'Replan Day'}</span>
-            </button>
-          </div>
-        </form>
-      )}
-
-      {/* ── STATE 3: EMPTY STATE ── */}
+      {/* ── EMPTY STATE OR TIMELINE ── */}
       {!hasPlan || planItems.length === 0 ? (
         <div className="bg-card-bg border border-gray-800 rounded-2xl p-12 text-center space-y-4">
           <Calendar className="mx-auto text-text-secondary opacity-40" size={48} />
           <div className="space-y-1">
             <h3 className="font-heading font-semibold text-lg text-text-primary">No Day Plan Generated Yet</h3>
             <p className="text-text-secondary text-xs max-w-md mx-auto">
-              You haven't generated a schedule for today. Click below to combine your timetable, email deadlines, and manual tasks into an optimized timeline.
+              Set your free window above or click below to build your deterministic schedule around classes, goals, and tasks.
             </p>
           </div>
           <button
-            onClick={() => handleGeneratePlan(false)}
+            onClick={() => handleGeneratePlan()}
             disabled={generatingPlan}
             className="px-6 py-2.5 bg-accent hover:bg-accent/90 text-dark-bg font-heading font-semibold text-xs rounded-xl inline-flex items-center gap-2 transition-all cursor-pointer shadow-lg shadow-accent/20 disabled:opacity-50"
           >
             <Sparkles size={16} className={generatingPlan ? 'animate-spin' : ''} />
-            <span>{generatingPlan ? 'Generating Plan with Phi-3.5...' : 'Generate Day Plan'}</span>
+            <span>{generatingPlan ? 'Generating Plan...' : 'Generate Day Plan'}</span>
           </button>
         </div>
       ) : (
-        /* ── Hour-by-Hour Timeline List ── */
         <div className="space-y-3 relative before:absolute before:left-4 before:top-4 before:bottom-4 before:w-0.5 before:bg-gray-800">
           {planItems.map((item, index) => {
-            const matchedTask = findMatchingTask(item.task);
-            const isCompleted = matchedTask && matchedTask.completed === 1;
+            const matchedTask = findMatchingTask(item);
+            const isCompleted = Boolean((matchedTask && Number(matchedTask.completed) === 1) || Number(item.completed) === 1);
+            const isFixedClass = item.source === 'fixed' && !item.task_id;
 
             return (
               <div 
-                key={index}
+                key={item.task_id ? `task-${item.task_id}-${index}` : index}
                 className={`bg-card-bg border rounded-2xl p-4 ml-8 relative transition-all ${
                   isCompleted 
                     ? 'border-gray-800/60 bg-dark-bg/60 opacity-60' 
                     : 'border-gray-800 hover:border-accent/40'
                 }`}
               >
-                {/* Timeline node dot */}
                 <div className={`absolute -left-[25px] top-5 w-3.5 h-3.5 rounded-full border-2 ${
                   isCompleted 
                     ? 'bg-emerald-500 border-emerald-400' 
@@ -375,17 +598,14 @@ export default function DayPlan() {
                 }`} />
 
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  
-                  {/* Left: Checkbox + Task Info */}
                   <div className="flex items-start gap-3 min-w-0">
-                    
-                    {/* Checkbox */}
                     <button
                       type="button"
+                      disabled={isFixedClass}
                       onClick={() => handleToggleComplete(item)}
-                      title={matchedTask ? (isCompleted ? 'Mark incomplete' : 'Mark complete') : 'Inline event (no separate task row)'}
+                      title={isFixedClass ? 'Fixed class' : (isCompleted ? 'Mark incomplete' : 'Mark complete')}
                       className={`mt-0.5 shrink-0 transition-colors ${
-                        matchedTask ? 'cursor-pointer text-accent hover:text-accent/80' : 'cursor-not-allowed opacity-40 text-gray-600'
+                        !isFixedClass ? 'cursor-pointer text-accent hover:text-accent/80' : 'cursor-default opacity-30 text-gray-600'
                       }`}
                     >
                       {isCompleted ? (
@@ -395,9 +615,8 @@ export default function DayPlan() {
                       )}
                     </button>
 
-                    {/* Task Title & Time */}
                     <div className="space-y-1 min-w-0">
-                      <div className="flex items-center gap-2.5">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="font-mono text-xs font-semibold text-accent bg-accent/10 px-2 py-0.5 rounded border border-accent/20 shrink-0">
                           {item.time || 'Anytime'}
                         </span>
@@ -405,6 +624,11 @@ export default function DayPlan() {
                           <span className="text-[11px] text-text-secondary flex items-center gap-1 shrink-0">
                             <Clock size={12} />
                             {item.duration} mins
+                          </span>
+                        )}
+                        {item.floor && (
+                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
+                            Neglect Floor (30m)
                           </span>
                         )}
                       </div>
@@ -417,19 +641,14 @@ export default function DayPlan() {
                     </div>
                   </div>
 
-                  {/* Right Badges */}
                   <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
-                    {/* Source Badge */}
                     <span className={`text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full ${getSourceBadgeClass(item.source)}`}>
                       {item.source || 'manual'}
                     </span>
-
-                    {/* Priority Badge */}
                     <span className={`text-[10px] uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full ${getPriorityBadgeClass(item.priority)}`}>
                       {item.priority || 'medium'}
                     </span>
                   </div>
-
                 </div>
               </div>
             );
@@ -437,7 +656,31 @@ export default function DayPlan() {
         </div>
       )}
 
-      {/* Reusable Add Task Modal */}
+      {/* ── Not Scheduled Today (Deferred Goals & Tasks) ── */}
+      {deferredItems.length > 0 && (
+        <div className="bg-card-bg border border-gray-800 rounded-2xl p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="font-heading font-semibold text-sm text-text-primary">
+              Not Scheduled Today ({deferredItems.length})
+            </h3>
+            <span className="text-[11px] text-text-secondary">
+              Will rise in priority or appear in tonight&apos;s &ldquo;plan tomorrow&rdquo; check-in
+            </span>
+          </div>
+          <div className="space-y-2">
+            {deferredItems.map((d, idx) => (
+              <div
+                key={idx}
+                className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 p-3 rounded-xl bg-dark-bg/70 border border-gray-800/80 text-xs"
+              >
+                <span className="font-semibold text-text-primary">{d.item}</span>
+                <span className="text-text-secondary font-mono text-[11px]">{d.reason}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <AddTaskModal
         isOpen={isAddTaskOpen}
         onClose={() => setIsAddTaskOpen(false)}

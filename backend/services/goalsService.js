@@ -207,6 +207,9 @@ function computeGoalProgress(goal, todayDateStr, todayDateObj) {
   const daysSinceActivity = lastActivityDate
     ? Math.max(0, daysBetween(lastActivityDate, todayDateStr))
     : 0;
+  const lastLoggedToday = Boolean(
+    db.prepare('SELECT 1 FROM goal_progress_log WHERE goal_id = ? AND date = ? LIMIT 1').get(goal.id, todayDateStr)
+  );
 
   // days_left, expected_progress, behind_by, is_overdue
   const isOverdue = goal.deadline ? daysBetween(goal.deadline, todayDateStr) > 0 : false;
@@ -215,7 +218,9 @@ function computeGoalProgress(goal, todayDateStr, todayDateObj) {
     : null;
 
   let expectedProgress = 0;
-  if (goal.created_date && goal.deadline) {
+  if (goal.deadline && daysBetween(todayDateStr, goal.deadline) <= 0) {
+    expectedProgress = 100;
+  } else if (goal.created_date && goal.deadline) {
     const totalDays = daysBetween(goal.created_date, goal.deadline);
     const elapsedDays = daysBetween(goal.created_date, todayDateStr);
     if (totalDays > 0) {
@@ -229,7 +234,8 @@ function computeGoalProgress(goal, todayDateStr, todayDateObj) {
       progress: 100, progress_source: 'completed',
       days_left: daysLeft, expected_progress: expectedProgress,
       behind_by: 0, is_overdue: isOverdue,
-      last_activity_date: lastActivityDate, days_since_activity: daysSinceActivity
+      last_activity_date: lastActivityDate, days_since_activity: daysSinceActivity,
+      last_logged_today: lastLoggedToday
     };
   }
 
@@ -262,7 +268,8 @@ function computeGoalProgress(goal, todayDateStr, todayDateObj) {
       days_left: daysLeft, expected_progress: expectedProgress,
       behind_by: Math.max(0, expectedProgress - progress),
       is_overdue: isOverdue, days_this_week: daysThisWeek,
-      last_activity_date: lastActivityDate, days_since_activity: daysSinceActivity
+      last_activity_date: lastActivityDate, days_since_activity: daysSinceActivity,
+      last_logged_today: lastLoggedToday
     };
   } else {
     // milestone
@@ -283,7 +290,8 @@ function computeGoalProgress(goal, todayDateStr, todayDateObj) {
     progress, progress_source: progressSource,
     days_left: daysLeft, expected_progress: expectedProgress,
     behind_by: behindBy, is_overdue: isOverdue,
-    last_activity_date: lastActivityDate, days_since_activity: daysSinceActivity
+    last_activity_date: lastActivityDate, days_since_activity: daysSinceActivity,
+    last_logged_today: lastLoggedToday
   };
 }
 

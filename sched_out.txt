@@ -112,8 +112,10 @@ DEFERRED:
   ✗ Shell Scripting Lab: no gap long enough (needs 60 min, largest free gap 45 min (30 usable after buffers))
 
 SHRUNK:
-  ⬇ PostgreSQL + Spring Boot: given=30min needed=60min (neglect floor session (30 min vs 60 min full session; 6d inactive))
   ⬇ Spring Boot Basics: given=1 units needed=2 units (budget: only 1 of 2 unit(s) fit (120 min left))
+
+FLOOR SESSIONS:
+  🛟 PostgreSQL + Spring Boot: 30min (short 30-min session to keep PostgreSQL + Spring Boot moving (6d inactive))
 
 BEHIND PACE (never dropped silently):
   ⏳ LeetCode 320: needs 8, given 2 — MAX_BLOCK_MINS: one 120-min block/day = 2 unit(s)
@@ -158,7 +160,8 @@ SCORE TABLE   today = 2026-10-26   budget = 300min   caps: MAX_GOAL_SHARE=0.5, M
   ✔ (a2) step-less floor block carries empty step_ids=[] (never marks a normal step complete)
   ✔ (a2) stepped goal Spring Boot carries step_ids=[101] and is not a floor block
   ✔ (a2) scheduling does not mutate step.done on stepped goals
-  ✔ (a2) PostgreSQL floor session appears in shrunk (30 min given vs 60 min full session)
+  ✔ (a2) PostgreSQL floor session is reported in floorSessions (30 min session to keep goal moving)
+  ✔ (a2) floor session is NOT placed in shrunk
   ✔ (a2) deferred goals show both numbers: "largest free gap X min (Y usable after buffers)"
   ✔ (a2) LeetCode needs 8/day, capped to 2 → visible as behind pace
 
@@ -194,8 +197,10 @@ DEFERRED:
   ✗ Shell Scripting Lab: no gap long enough (needs 60 min, largest free gap 30 min (15 usable after buffers))
 
 SHRUNK:
-  ⬇ PostgreSQL + Spring Boot: given=30min needed=60min (neglect floor session (30 min vs 60 min full session; 6d inactive))
   ⬇ LeetCode 320: solve 2 problems: given=45min needed=90min (no gap long enough for 90 min (largest free gap 90 min (75 usable after buffers)))
+
+FLOOR SESSIONS:
+  🛟 PostgreSQL + Spring Boot: 30min (short 30-min session to keep PostgreSQL + Spring Boot moving (6d inactive))
 
 BEHIND PACE (never dropped silently):
   ⏳ LeetCode 320: needs 8, given 1 — MAX_BLOCK_MINS: one 120-min block/day = 2 unit(s); placement: no gap fits 90 min (largest free gap 90 min (75 usable after buffers)) → 1 unit(s)
@@ -237,8 +242,8 @@ DEFERRED:
   ✗ Trees topic: no gap long enough (needs 60 min, largest free gap 45 min (30 usable after buffers))
   ✗ Shell Scripting Lab: no gap long enough (needs 60 min, largest free gap 45 min (30 usable after buffers))
 
-SHRUNK:
-  ⬇ PostgreSQL + Spring Boot: given=30min needed=60min (neglect floor session (30 min vs 60 min full session; 6d inactive))
+FLOOR SESSIONS:
+  🛟 PostgreSQL + Spring Boot: 30min (short 30-min session to keep PostgreSQL + Spring Boot moving (6d inactive))
 
 BEHIND PACE (never dropped silently):
   ⏳ LeetCode 320: needs 8, given 1 — MAX_BLOCK_MINS: one 120-min block/day = 2 unit(s); MAX_GOAL_SHARE: ≤50% of 150min = 1 unit(s)
@@ -317,8 +322,8 @@ DEFERRED:
   ✗ Trees topic: no gap long enough (needs 60 min, largest free gap 10 min (0 usable after buffers))
   ✗ Shell Scripting Lab: no gap long enough (needs 60 min, largest free gap 10 min (0 usable after buffers))
 
-SHRUNK:
-  ⬇ PostgreSQL + Spring Boot: given=30min needed=60min (neglect floor session (30 min vs 60 min full session; 6d inactive))
+FLOOR SESSIONS:
+  🛟 PostgreSQL + Spring Boot: 30min (short 30-min session to keep PostgreSQL + Spring Boot moving (6d inactive))
 
 BEHIND PACE (never dropped silently):
   ⏳ LeetCode 320: needs 8, given 0 — MAX_BLOCK_MINS: one 120-min block/day = 2 unit(s); MAX_GOAL_SHARE: ≤50% of 40min = 1 unit(s); placement: no gap long enough (needs 45 min, largest free gap 10 min (0 usable after buffers))
@@ -329,7 +334,7 @@ BEHIND PACE (never dropped silently):
 ✅ No flexible block overlaps anything
 
   ✔ (c2) neglected step-less goal PostgreSQL fits as a 30-min floor session in the 40-min window
-  ✔ (c2) PostgreSQL floor session is listed in shrunk (30 min vs 60 min)
+  ✔ (c2) PostgreSQL floor session is listed in floorSessions and NOT in shrunk
   ✔ (c2) remaining 4 goals deferred with "no gap long enough (needs N min, largest free gap 10 min (0 usable after buffers))"
   ✔ (c2) 2nd neglected step-less goal (Shell Scripting Lab) deferred by 10-min leftover gap
   ✔ (c2) 3rd neglected step-less goal beyond MAX_FLOOR_PER_DAY=2 stays deferred
@@ -423,8 +428,10 @@ PLAN (chronological):
               → ends 1:30 PM (45min)  units=1
 
 SHRUNK:
-  ⬇ PostgreSQL + Spring Boot: given=30min needed=60min (neglect floor session (30 min vs 60 min full session; 6d inactive))
   ⬇ LeetCode 320: given=1 units needed=2 units (budget: only 1 of 2 unit(s) fit (75 min left))
+
+FLOOR SESSIONS:
+  🛟 PostgreSQL + Spring Boot: 30min (short 30-min session to keep PostgreSQL + Spring Boot moving (6d inactive))
 
 BEHIND PACE (never dropped silently):
   ⏳ Spring Boot Basics: needs 3, given 2 — MAX_BLOCK_MINS: one 120-min block/day = 2 unit(s)
@@ -574,8 +581,10 @@ DEFERRED:
   ✗ Shell Scripting Lab: no budget for 1 unit (60 min + 15 min buffer, have 45 min)
 
 SHRUNK:
-  ⬇ PostgreSQL + Spring Boot: given=30min needed=60min (neglect floor session (30 min vs 60 min full session; 6d inactive))
   ⬇ Spring Boot Basics: given=1 units needed=2 units (budget: only 1 of 2 unit(s) fit (120 min left))
+
+FLOOR SESSIONS:
+  🛟 PostgreSQL + Spring Boot: 30min (short 30-min session to keep PostgreSQL + Spring Boot moving (6d inactive))
 
 BEHIND PACE (never dropped silently):
   ⏳ LeetCode 320: needs 8, given 2 — MAX_BLOCK_MINS: one 120-min block/day = 2 unit(s)
@@ -648,6 +657,13 @@ PLAN (chronological):
   ✔ (k) duration_min 90 respected
   ✔ (k) email-derived task carries origin=email
   ✔ (k) inside every segment: urgent/forced first, then priority high → low
+  ✔ (k) parseTimeToMinutes("9AM") === 540
+  ✔ (k) parseTimeToMinutes("9 AM") === 540
+  ✔ (k) parseTimeToMinutes("9:00 AM") === 540
+  ✔ (k) parseTimeToMinutes("3:30 PM") === 930
+  ✔ (k) parseTimeToMinutes("banana") === null (never throws)
+  ✔ (k) time_slot "9AM" pinned at 9:00 AM (540)
+  ✔ (k) garbage time_slot ignored and placed in first free gap (8:00 AM)
 
 ──────────────────────────────────────────────────────────────────────
 SCENARIO (l) Same task name twice (case-insensitive) → placed once
@@ -705,8 +721,8 @@ DEFERRED:
   ✗ Trees topic: no gap long enough (needs 60 min, largest free gap 60 min (30 usable after buffers))
   ✗ Shell Scripting Lab: no gap long enough (needs 60 min, largest free gap 60 min (30 usable after buffers))
 
-SHRUNK:
-  ⬇ PostgreSQL + Spring Boot: given=30min needed=60min (neglect floor session (30 min vs 60 min full session; 6d inactive))
+FLOOR SESSIONS:
+  🛟 PostgreSQL + Spring Boot: 30min (short 30-min session to keep PostgreSQL + Spring Boot moving (6d inactive))
 
 BEHIND PACE (never dropped silently):
   ⏳ LeetCode 320: needs 8, given 2 — MAX_BLOCK_MINS: one 120-min block/day = 2 unit(s)

@@ -105,7 +105,7 @@ const LAYER_RANK    = b => {
 // ─────────────────────────────────────────────────────────────────────────────
 // SMALL HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
-const isFlexible = b => b.source !== 'fixed';
+const isFlexible = b => b.source !== 'fixed' && b.source !== 'surprise_event';
 const tierOf     = b => (b.source === 'urgent' || b.source === 'forced') ? 0 : 1;
 const rankOf     = b => PRIORITY_RANK[b.priority] ?? 1;
 const normName   = s => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -271,7 +271,7 @@ function buildFixedTimeline(timetableBlocks, fixedTasks) {
     if (s === null) continue;
     const e = ft.fixed_end ? parseTimeToMinutes(ft.fixed_end) : null;
     const dur = e !== null ? (e - s) : (ft.duration_min || 60);
-    items.push({ task: ft.name, startMinutes: s, duration: dur, source: 'fixed', kind: 'task', priority: ft.priority || 'high', goal_id: ft.goal_id || null, task_id: ft.id || null });
+    items.push({ task: ft.name, startMinutes: s, duration: dur, source: ft.source || 'fixed', kind: 'task', priority: ft.priority || 'high', goal_id: ft.goal_id || null, task_id: ft.id || null });
   }
   return items.sort((a, b) => a.startMinutes - b.startMinutes);
 }
@@ -379,14 +379,15 @@ function allocateFlexibleWork({
   neglectDays       = DEFAULT_NEGLECT_DAYS,
   enableFloor       = true
 }) {
-  const blocks = [], deferred = [], shrunk = [], warnings = [], duplicates = [];
+  const blocks = [], deferred = [], shrunk = [], floorSessions = [], warnings = [], duplicates = [];
   const seenNames = new Set();
   let remaining = budgetMinutes;
 
   const bufCost  = () => (blocks.length > 0 ? bufferMinutes : 0);
   const fits     = mins => remaining >= mins + bufCost();
   const addBlock = block => { remaining -= block.duration + bufCost(); blocks.push(block); };
-  const prefOf   = t => (t.time_slot ? parseTimeToMinutes(t.time_slot) : null);
+  const prefOf   = t => (t.time_slot ? parseTimeToMinutes(String(t.time_slot)) : null);
+  const badPref  = t => Boolean(t.time_slot && String(t.time_slot).trim() && parseTimeToMinutes(String(t.time_slot)) === null);
 
   function isDuplicate(name) {
     const key = normName(name);
@@ -408,7 +409,7 @@ function allocateFlexibleWork({
   for (const task of sortedUrgent) {
     if (isDuplicate(task.name)) continue;
     const dur = task.duration_min || defaultUrgentMins;
-    const base = { task: task.name, priority: task.priority || 'high', source: 'urgent', task_id: task.id ?? null, goal_id: task.goal_id ?? null, preferredStartMins: prefOf(task) };
+    const base = { task: task.name, priority: task.priority || 'high', source: 'urgent', task_id: task.id ?? null, goal_id: task.goal_id ?? null, preferredStartMins: prefOf(task), ...(badPref(task) ? { placeEarliest: true } : {}) };
     if (fits(dur)) {
       addBlock({ ...base, duration: dur });
     } else if (fits(MIN_BLOCK_MINS)) {
@@ -425,7 +426,7 @@ function allocateFlexibleWork({
   for (const item of forced) {
     if (isDuplicate(item.name)) continue;
     const dur = item.duration_min || MIN_BLOCK_MINS;
-    const base = { task: item.name, priority: item.priority || 'medium', source: 'forced', task_id: item.id ?? null, goal_id: item.goal_id ?? null, preferredStartMins: prefOf(item) };
+    const base = { task: item.name, priority: item.priority || 'medium', source: 'forced', task_id: item.id ?? null, goal_id: item.goal_id ?? null, preferredStartMins: prefOf(item), ...(badPref(item) ? { placeEarliest: true } : {}) };
     if (fits(dur)) {
       addBlock({ ...base, duration: dur });
     } else if (fits(MIN_BLOCK_MINS)) {
@@ -497,10 +498,10 @@ function allocateFlexibleWork({
         row.units_given   = 1;
         row.minutes_given = FLOOR_MINS;
         row.limits.push(`neglect floor: ${FLOOR_MINS} min session (${dsa}d inactive >= ${neglectDays}d)`);
-        shrunk.push({
-          item: goal.title, goal_id: goal.id, floor: true,
-          given: FLOOR_MINS, needed: MINS_STEPLESS_SESSION, unit: 'min',
-          reason: `neglect floor session (${FLOOR_MINS} min vs ${MINS_STEPLESS_SESSION} min full session; ${dsa}d inactive)`
+        floorSessions.push({
+          item: goal.title, goal_id: goal.id,
+          duration: FLOOR_MINS, needed: MINS_STEPLESS_SESSION, days_since_activity: dsa,
+          reason: `short ${FLOOR_MINS}-min session to keep ${goal.title} moving (${dsa}d inactive)`
         });
       } else {
         const reason = `no budget for ${FLOOR_MINS} min floor session (${FLOOR_MINS} min + ${bufCost()} min buffer, have ${remaining} min)`;
@@ -560,7 +561,8 @@ function allocateFlexibleWork({
     const block = {
       task: String(t.name).trim(), priority: t.priority || 'medium', duration: dur,
       source: 'flexible', origin: t.source || 'manual',
-      task_id: t.id ?? null, goal_id: t.goal_id ?? null, preferredStartMins: prefOf(t)
+      task_id: t.id ?? null, goal_id: t.goal_id ?? null, preferredStartMins: prefOf(t),
+      ...(badPref(t) ? { placeEarliest: true } : {})
     };
     if (fits(dur)) {
       addBlock(block);
@@ -570,7 +572,7 @@ function allocateFlexibleWork({
   }
 
   return {
-    blocks, deferred, shrunk, warnings, duplicates,
+    blocks, deferred, shrunk, floorSessions, warnings, duplicates,
     scoreRows: rows,                          // internal (mutable) rows for buildDaySchedule
     scores: publicRows(rows),
     behind_pace: behindPaceFromScores(rows)
@@ -645,6 +647,7 @@ function buildDaySchedule({
   const goalById = new Map(goals.map(g => [g.id, g]));
   const deferred = [...alloc.deferred];
   const shrunk   = [...alloc.shrunk];
+  const floorSessions = [...alloc.floorSessions];
   const warnings = [...conflictWarnings, ...alloc.warnings];
 
   function shrinkToFit(block, avail) {
@@ -748,6 +751,10 @@ function buildDaySchedule({
     } else if (!r.placed) {
       const reason = `no gap long enough (needs ${minNeeded(block)} min, ${formatGapStats(r.maxRaw, r.maxAvail)})`;
       deferred.push({ item: block.task, goal_id: block.goal_id ?? null, floor: !!block.floor, reason });
+      if (block.floor) {
+        const fi = floorSessions.findIndex(f => f.goal_id === block.goal_id);
+        if (fi !== -1) floorSessions.splice(fi, 1);
+      }
       if (row) row.limits.push(`placement: ${reason}`);
     }
   }
@@ -768,10 +775,11 @@ function buildDaySchedule({
       deferred.splice(deferred.indexOf(d), 1);
       row.limits = row.limits.filter(l => !l.startsWith('budget:'));
       if (d.floor) {
-        shrunk.push({
-          item: goal.title, goal_id: goal.id, floor: true,
-          given: FLOOR_MINS, needed: MINS_STEPLESS_SESSION, unit: 'min',
-          reason: `neglect floor session (${FLOOR_MINS} min vs ${MINS_STEPLESS_SESSION} min full session; ${goal.days_since_activity || 0}d inactive)`
+        const dsa = goal.days_since_activity || 0;
+        floorSessions.push({
+          item: goal.title, goal_id: goal.id,
+          duration: FLOOR_MINS, needed: MINS_STEPLESS_SESSION, days_since_activity: dsa,
+          reason: `short ${FLOOR_MINS}-min session to keep ${goal.title} moving (${dsa}d inactive)`
         });
       } else if (r.placed.units < d.want_units) {
         const lim = `placement: leftover gap (${gapDesc}) fits ${r.placed.units} of ${d.want_units} unit(s)`;
@@ -823,7 +831,7 @@ function buildDaySchedule({
 
   return {
     refused: false, today, nowMinutes, windowEndMinutes, budgetMinutes,
-    plan, deferred, shrunk, warnings, duplicates: alloc.duplicates,
+    plan, deferred, shrunk, floorSessions, warnings, duplicates: alloc.duplicates,
     behind_pace: behindPaceFromScores(rows),
     scores: publicRows(rows),
     gapSummary
@@ -884,8 +892,9 @@ function buildDayOutline({
 
   return {
     today, fixedItems, freeBlocks, budgetUsed, budgetMinutes,
-    deferred: result.deferred, shrunk: result.shrunk, warnings: result.warnings,
-    duplicates: result.duplicates, behind_pace: result.behind_pace, scores: result.scores
+    deferred: result.deferred, shrunk: result.shrunk, floorSessions: result.floorSessions,
+    warnings: result.warnings, duplicates: result.duplicates,
+    behind_pace: result.behind_pace, scores: result.scores
   };
 }
 

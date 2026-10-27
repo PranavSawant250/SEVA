@@ -91,6 +91,10 @@ function printLists(result) {
     console.log('\nSHRUNK:');
     result.shrunk.forEach(s => console.log(`  ⬇ ${s.item}: given=${fmtAmt(s.given, s.unit)} needed=${fmtAmt(s.needed, s.unit)} (${s.reason})`));
   }
+  if (result.floorSessions?.length) {
+    console.log('\nFLOOR SESSIONS:');
+    result.floorSessions.forEach(f => console.log(`  🛟 ${f.item}: ${f.duration}min (${f.reason})`));
+  }
   if (result.behind_pace?.length) {
     console.log('\nBEHIND PACE (never dropped silently):');
     result.behind_pace.forEach(b => console.log(`  ⏳ ${b.item}: needs ${b.needed_units}, given ${b.given_units} — ${b.reason}`));
@@ -238,8 +242,10 @@ function scenarioA() {
     '(a2) stepped goal Spring Boot carries step_ids=[101] and is not a floor block');
   check(SIX_GOALS[0].steps.every(s => s.done === false),
     '(a2) scheduling does not mutate step.done on stepped goals');
-  check(result.shrunk.some(s => s.goal_id === 2 && s.given === FLOOR_MINS && s.needed === 60),
-    '(a2) PostgreSQL floor session appears in shrunk (30 min given vs 60 min full session)');
+  check(result.floorSessions.some(f => f.goal_id === 2 && f.duration === FLOOR_MINS),
+    '(a2) PostgreSQL floor session is reported in floorSessions (30 min session to keep goal moving)');
+  check(!result.shrunk.some(s => s.goal_id === 2 || s.floor),
+    '(a2) floor session is NOT placed in shrunk');
   check(result.deferred.every(d => /largest free gap \d+ min \(\d+ usable after buffers\)/.test(d.reason)),
     '(a2) deferred goals show both numbers: "largest free gap X min (Y usable after buffers)"');
   const lc = result.scores.find(r => r.title === 'LeetCode 320');
@@ -337,8 +343,8 @@ function scenarioC() {
   console.log('');
   check(result.plan.length === 1 && result.plan[0].goal_id === 2 && result.plan[0].floor === true && result.plan[0].duration === FLOOR_MINS,
     `(c2) neglected step-less goal PostgreSQL fits as a ${FLOOR_MINS}-min floor session in the 40-min window`);
-  check(result.shrunk.some(s => s.goal_id === 2 && s.given === FLOOR_MINS && s.needed === 60),
-    '(c2) PostgreSQL floor session is listed in shrunk (30 min vs 60 min)');
+  check(result.floorSessions.some(f => f.goal_id === 2 && f.duration === FLOOR_MINS) && result.shrunk.length === 0,
+    '(c2) PostgreSQL floor session is listed in floorSessions and NOT in shrunk');
   check(result.deferred.length === 4 && result.deferred.every(d => /no gap long enough \(needs \d+ min, largest free gap 10 min \(0 usable after buffers\)\)/.test(d.reason)),
     '(c2) remaining 4 goals deferred with "no gap long enough (needs N min, largest free gap 10 min (0 usable after buffers))"');
 
@@ -561,6 +567,22 @@ function scenarioK() {
   check(result.plan.find(b => b.task_id === 53).duration === 90, '(k) duration_min 90 respected');
   check(result.plan.find(b => b.task_id === 54).origin === 'email', '(k) email-derived task carries origin=email');
   checkSegmentOrder(result, '(k)');
+
+  // Test all 4 required time_slot formats ("9AM", "9 AM", "9:00 AM", "3:30 PM") + garbage value
+  check(parseTimeToMinutes('9AM') === 540, '(k) parseTimeToMinutes("9AM") === 540');
+  check(parseTimeToMinutes('9 AM') === 540, '(k) parseTimeToMinutes("9 AM") === 540');
+  check(parseTimeToMinutes('9:00 AM') === 540, '(k) parseTimeToMinutes("9:00 AM") === 540');
+  check(parseTimeToMinutes('3:30 PM') === 930, '(k) parseTimeToMinutes("3:30 PM") === 930');
+  check(parseTimeToMinutes('banana') === null, '(k) parseTimeToMinutes("banana") === null (never throws)');
+  const garbageRes = buildDaySchedule(baseOpts({
+    nowMinutes: 480, windowEndMinutes: 660,
+    flexibleTasks: [
+      { id: 55, name: 'Task at 9AM', priority: 'high', source: 'manual', time_slot: '9AM', duration_min: 30 },
+      { id: 56, name: 'Task with garbage time_slot', priority: 'medium', source: 'manual', time_slot: 'banana', duration_min: 30 }
+    ]
+  }));
+  check(garbageRes.plan.find(b => b.task_id === 55)?.startMinutes === 540, '(k) time_slot "9AM" pinned at 9:00 AM (540)');
+  check(garbageRes.plan.find(b => b.task_id === 56)?.startMinutes === 480, '(k) garbage time_slot ignored and placed in first free gap (8:00 AM)');
 }
 
 // ─────────────────────────────────────────────────────────────
