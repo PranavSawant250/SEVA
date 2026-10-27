@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../database/db');
-const { generateNightSummary } = require('../services/summaryService');
+const { generateNightSummary, getBehindPaceGoals } = require('../services/summaryService');
 const { getTodayDate } = require('../utils/dateUtils');
 
 // Helper to safely parse JSON strings back into arrays/objects
@@ -21,7 +21,7 @@ function safeJsonParse(jsonStr, fallback = []) {
 router.get('/generate', async (req, res) => {
   try {
     console.log('📡 GET /api/summary/generate — generating night summary...');
-    const summary = await generateNightSummary();
+    const summary = await generateNightSummary(new Date());
 
     res.json({
       success: true,
@@ -30,6 +30,7 @@ router.get('/generate', async (req, res) => {
   } catch (err) {
     console.error('❌ Error in GET /api/summary/generate:', err.message);
     res.status(500).json({
+      success: false,
       error: 'Failed to generate night summary',
       details: err.message
     });
@@ -41,6 +42,7 @@ router.get('/generate', async (req, res) => {
 // Query param: ?date=YYYY-MM-DD (optional).
 // Without date param → returns ALL night summaries ordered by date DESC.
 // Parses completed_tasks/missed_tasks/carry_forward JSON strings into real arrays.
+// Includes deterministic behind_pace_goals list.
 // ─────────────────────────────────────────────────────────────
 router.get('/history', (req, res) => {
   try {
@@ -63,6 +65,8 @@ router.get('/history', (req, res) => {
       `).all();
     }
 
+    const behindPaceGoals = getBehindPaceGoals(new Date());
+
     // Parse JSON strings back into real JS arrays for response
     const summaries = rows.map(r => ({
       id: r.id,
@@ -70,6 +74,7 @@ router.get('/history', (req, res) => {
       completed_tasks: safeJsonParse(r.completed_tasks, []),
       missed_tasks: safeJsonParse(r.missed_tasks, []),
       carry_forward: safeJsonParse(r.carry_forward, []),
+      behind_pace_goals: behindPaceGoals,
       seva_message: r.seva_message,
       streak: r.streak
     }));
@@ -82,6 +87,7 @@ router.get('/history', (req, res) => {
   } catch (err) {
     console.error('❌ Error in GET /api/summary/history:', err.message);
     res.status(500).json({
+      success: false,
       error: 'Failed to fetch summary history',
       details: err.message
     });

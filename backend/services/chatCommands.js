@@ -32,12 +32,16 @@ const { getTodayDate, parseTimeToMinutes, minutesToTimeString } = require('../ut
 // Starting a new session of either type cancels the other.
 // ─────────────────────────────────────────────────────────────
 let pendingState = null;  // { type: 'removal'|'checkin', ...data, expiresAt }
-const REMOVAL_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
+let removalTimeoutMs = 2 * 60 * 1000; // 2 minutes default
+
+function setRemovalTimeoutMs(ms) {
+  removalTimeoutMs = typeof ms === 'number' && ms > 0 ? ms : 2 * 60 * 1000;
+}
 
 function clearPending() { pendingState = null; }
 
 function isPendingExpired() {
-  return pendingState && Date.now() > pendingState.expiresAt;
+  return Boolean(pendingState && Date.now() > pendingState.expiresAt);
 }
 
 // Expose for nightly check-in (Step 10) to set/read its session
@@ -48,6 +52,25 @@ function getPendingState() {
     return null;
   }
   return pendingState;
+}
+
+/**
+ * If an active (non-expired) pending state exists, clears it and returns
+ * a notice string so the new session can report that it cancelled the previous one.
+ */
+function consumeActivePendingCancellationNotice() {
+  if (!pendingState) return '';
+  const expired = isPendingExpired();
+  const old = pendingState;
+  pendingState = null;
+  if (expired) return '';
+  if (old.type === 'removal') {
+    return `(Cancelled pending removal confirmation for "${old.targetTitle}".)\n`;
+  }
+  if (old.type === 'checkin') {
+    return `(Cancelled previous "plan tomorrow" check-in session.)\n`;
+  }
+  return '';
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -74,10 +97,21 @@ function isNo(text)  { return NO_WORDS.has(text.trim().toLowerCase()); }
 // 1. PENDING STATE HANDLER
 // ─────────────────────────────────────────────────────────────
 function handlePendingState(message, todayDate) {
-  const state = getPendingState();
-  if (!state) return null;
+  if (!pendingState) return null;
 
   const msg = message.trim();
+
+  // Check if expired BEFORE clearing so we can deterministically reply on yes/no
+  if (isPendingExpired()) {
+    const expiredState = pendingState;
+    clearPending();
+    if (expiredState.type === 'removal' && (isYes(msg) || isNo(msg))) {
+      return `Confirmation for "${expiredState.targetTitle}" expired. Nothing was removed.`;
+    }
+    return null;
+  }
+
+  const state = pendingState;
 
   if (state.type === 'removal') {
     if (isYes(msg)) {
@@ -89,14 +123,16 @@ function handlePendingState(message, todayDate) {
       clearPending();
       return `OK, keeping "${state.targetTitle}". Nothing was changed.`;
     } else {
-      // Not a yes/no — let other handlers try; but re-confirm if no other match
-      return null; // fall through — caller will retry other handlers
+      // Not a yes/no — let other handlers try
+      return null;
     }
   }
 
   if (state.type === 'checkin') {
     // Check-in session is handled by nightlyService (Step 10)
-    // Stub: will be replaced
+    if (typeof state.onReply === 'function') {
+      return state.onReply(msg, todayDate);
+    }
     return null;
   }
 
@@ -121,7 +157,15 @@ function executeRemoval(state) {
   }
 
   if (state.removalType === 'task') {
-    db.prepare('DELETE FROM tasks WHERE id = ?').run(state.targetId);
+    if (Array.isArray(state.targetIds) && state.targetIds.length > 0) {
+      const delStmt = db.prepare('DELETE FROM tasks WHERE id = ? AND completed = 0');
+      const tx = db.transaction(() => {
+        for (const id of state.targetIds) delStmt.run(id);
+      });
+      tx();
+    } else {
+      db.prepare('DELETE FROM tasks WHERE id = ? AND completed = 0').run(state.targetId);
+    }
     return `✓ Task "${state.targetTitle}" removed.`;
   }
 
@@ -341,11 +385,24 @@ function handleRemovalCommand(message, todayDate) {
 function initiateRemoval(type, query, todayStr) {
   let candidates;
   if (type === 'goal') {
-    candidates = db.prepare("SELECT id, title FROM goals WHERE status = 'active'").all();
+    candidates = db.prepare("SELECT id, title FROM goals WHERE status = 'active'").all()
+      .map(g => ({ id: g.id, ids: [g.id], title: g.title }));
   } else {
-    candidates = db.prepare(
-      "SELECT id, name as title FROM tasks WHERE completed = 0 AND date >= ?"
-    ).all(todayStr);
+    // Match incomplete tasks (de-duplicated by case-insensitive title so carry-forward duplicates don't cause false ambiguity)
+    const rows = db.prepare(
+      "SELECT id, name as title FROM tasks WHERE completed = 0 ORDER BY date DESC, id DESC"
+    ).all();
+    const byNormTitle = new Map();
+    for (const r of rows) {
+      const key = (r.title || '').trim().toLowerCase();
+      if (!key) continue;
+      if (!byNormTitle.has(key)) {
+        byNormTitle.set(key, { id: r.id, ids: [r.id], title: r.title.trim() });
+      } else {
+        byNormTitle.get(key).ids.push(r.id);
+      }
+    }
+    candidates = Array.from(byNormTitle.values());
   }
 
   // Exact match first
@@ -361,21 +418,25 @@ function initiateRemoval(type, query, todayStr) {
   }
   if (matched.length > 1) {
     const titles = matched.map(c => `"${c.title}"`).join(', ');
-    return `"${query}" matches multiple ${type}s: ${titles}. Please be more specific.`;
+    const allList = candidates.map(c => `"${c.title}"`).join(', ');
+    const label = type === 'goal' ? 'Active goals' : 'Incomplete tasks';
+    return `"${query}" matches multiple ${type}s: ${titles}. Which one did you mean? (${label}: ${allList})`;
   }
 
+  const cancelNote = consumeActivePendingCancellationNotice();
   const target = matched[0];
   // Set pending confirmation
   pendingState = {
     type: 'removal',
     removalType: type,
     targetId: target.id,
+    targetIds: target.ids,
     targetTitle: target.title,
     todayStr,
-    expiresAt: Date.now() + REMOVAL_TIMEOUT_MS
+    expiresAt: Date.now() + removalTimeoutMs
   };
 
-  return `Remove ${type} "${target.title}"? Reply yes to confirm (or no to cancel). This expires in 2 minutes.`;
+  return `${cancelNote}Remove ${type} "${target.title}"? Reply yes to confirm (or no to cancel). This expires in 2 minutes.`;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -385,8 +446,9 @@ const RE_PLAN_TOMORROW = /\b(?:plan(?:\s+(?:my|for))?\s+tomorrow|tomorrow(?:'s)?
 
 function handlePlanTomorrow(message, todayDate) {
   if (!RE_PLAN_TOMORROW.test(message)) return null;
-  // Step 10 will replace this stub
-  return `The nightly check-in (Step 10) is coming — not yet wired up.`;
+  const cancelNote = consumeActivePendingCancellationNotice();
+  // Step 10 will replace this stub with nightlyService.startNightlyCheckIn
+  return `${cancelNote}The nightly check-in (Step 10) is coming — not yet wired up.`;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -436,6 +498,8 @@ module.exports = {
   getPendingState,
   setPendingState,
   clearPending,
+  setRemovalTimeoutMs,
+  consumeActivePendingCancellationNotice,
   RE_PLAN_TOMORROW,
   RE_FREE_TILL,
   RE_HAVE_TIME,

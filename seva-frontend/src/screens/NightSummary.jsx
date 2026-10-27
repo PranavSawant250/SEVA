@@ -314,6 +314,35 @@ export default function NightSummary() {
             </div>
           )}
 
+          {/* ── Behind Pace Goals Section (Deterministic, no AI) ── */}
+          {selectedSummary.behind_pace_goals?.length > 0 && (
+            <div className="bg-card-bg border border-red-500/20 rounded-2xl p-6 space-y-4">
+              <h3 className="font-heading font-semibold text-base text-text-primary flex items-center gap-2">
+                <AlertCircle size={18} className="text-red-400" />
+                Goals Behind Pace ({selectedSummary.behind_pace_goals.length})
+              </h3>
+              <div className="space-y-2">
+                {selectedSummary.behind_pace_goals.map((g, idx) => (
+                  <div key={g.goal_id || idx} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 bg-dark-bg/60 border border-red-500/10 rounded-xl">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full shrink-0 ${getPriorityBadgeClass(g.priority)}`}>
+                        {g.priority}
+                      </span>
+                      <span className="text-sm font-medium text-text-primary truncate">{g.title}</span>
+                    </div>
+                    <div className="flex items-center gap-3 text-xs text-text-secondary shrink-0">
+                      <span>Actual: <strong className="text-text-primary">{g.progress}%</strong></span>
+                      <span>Expected: <strong className="text-amber-300">{g.expected_progress}%</strong></span>
+                      <span className={g.is_overdue ? 'text-red-400 font-bold' : 'text-text-secondary'}>
+                        {g.is_overdue ? 'OVERDUE' : `${g.days_left}d left`}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* ── Regenerate button for today's summary ── */}
           {selectedSummary.date === today && (
             <div className="text-center pt-2">
