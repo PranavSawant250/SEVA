@@ -220,7 +220,7 @@ router.patch('/:id/complete', (req, res) => {
           progressAction = { type: 'count_increment', added, current_count: newCount, target_count: target };
         } else if (goal.goal_type === 'frequency') {
           const sameDayLog = db.prepare(`
-            SELECT id FROM goal_progress_log WHERE goal_id = ? AND date = ? LIMIT 1
+            SELECT 1 FROM goal_progress_log WHERE goal_id = ? AND date = ? GROUP BY date HAVING SUM(amount) > 0 LIMIT 1
           `).get(goal.id, logDate);
           if (!sameDayLog) {
             db.prepare(`

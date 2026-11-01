@@ -18,8 +18,7 @@ credentials/
 *.backup
 seva.db
 
-# Study Notes & Details folders (Permanently gitignored as per project rule)
-study-notes/
+# Details folder
 details/
 
 # Logs & temp files

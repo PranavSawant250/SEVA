@@ -132,11 +132,12 @@ db.exec(`
 
   -- goal_progress_log: audit trail for count and frequency logging
   CREATE TABLE IF NOT EXISTS goal_progress_log (
-    id       INTEGER PRIMARY KEY AUTOINCREMENT,
-    goal_id  INTEGER NOT NULL,
-    date     TEXT NOT NULL,
-    amount   INTEGER DEFAULT 1,
-    note     TEXT
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    goal_id         INTEGER NOT NULL,
+    date            TEXT NOT NULL,
+    amount          INTEGER DEFAULT 1,
+    note            TEXT,
+    chat_message_id INTEGER NULL
   );
 
   -- goal_steps: optional checklist for milestone goals
@@ -263,6 +264,24 @@ try {
     if (!existingCols.includes(col.name)) {
       db.exec(col.sql);
       console.log(`  📐 Added column emails.${col.name}`);
+    }
+  }
+})();
+
+// ─────────────────────────────────────────────────────────────
+// Additive columns on goal_progress_log (guarded per-column).
+// ─────────────────────────────────────────────────────────────
+(function addGoalProgressLogColumnsIfMissing() {
+  const existingCols = db.prepare("PRAGMA table_info(goal_progress_log)").all().map(c => c.name);
+
+  const newCols = [
+    { name: 'chat_message_id', sql: 'ALTER TABLE goal_progress_log ADD COLUMN chat_message_id INTEGER NULL' }
+  ];
+
+  for (const col of newCols) {
+    if (!existingCols.includes(col.name)) {
+      db.exec(col.sql);
+      console.log(`  📐 Added column goal_progress_log.${col.name}`);
     }
   }
 })();

@@ -21,9 +21,7 @@ seva.db
 backend/*.db
 backend/seva.db
 
-# Study Notes & Details folders (Permanently gitignored as per project rule)
-study-notes/
-backend/study-notes/
+# Details folder
 details/
 backend/details/
 

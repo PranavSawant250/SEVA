@@ -124,7 +124,8 @@ function handlePendingState(message, todayDate) {
       clearPending();
       return `OK, keeping "${state.targetTitle}". Nothing was changed.`;
     } else {
-      // Not a yes/no — let other handlers try
+      // Unrelated message cancels pending removal confirmation
+      clearPending();
       return null;
     }
   }

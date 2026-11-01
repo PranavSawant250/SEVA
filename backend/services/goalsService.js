@@ -199,17 +199,28 @@ function importGoals(payload, todayDate) {
 // todayDate is "YYYY-MM-DD", todayDateObj is the Date object for week calc.
 // ─────────────────────────────────────────────────────────────
 function computeGoalProgress(goal, todayDateStr, todayDateObj) {
-  // last_activity_date + shared computeDaysSinceActivity (never 999)
-  const lastLog = db.prepare(
-    'SELECT date FROM goal_progress_log WHERE goal_id = ? AND date <= ? ORDER BY date DESC LIMIT 1'
-  ).get(goal.id, todayDateStr);
+  // last_activity_date + shared computeDaysSinceActivity (using NET positive amount per day)
+  const lastLog = db.prepare(`
+    SELECT date FROM goal_progress_log 
+    WHERE goal_id = ? AND date <= ? 
+    GROUP BY date 
+    HAVING SUM(amount) > 0 
+    ORDER BY date DESC LIMIT 1
+  `).get(goal.id, todayDateStr);
+
   const lastActivityDate = lastLog ? lastLog.date : goal.created_date;
   const daysSinceActivity = computeDaysSinceActivity(
     { last_log_date: lastLog ? lastLog.date : null, created_date: goal.created_date },
     todayDateStr
   );
   const lastLoggedToday = Boolean(
-    db.prepare('SELECT 1 FROM goal_progress_log WHERE goal_id = ? AND date = ? LIMIT 1').get(goal.id, todayDateStr)
+    db.prepare(`
+      SELECT 1 FROM goal_progress_log 
+      WHERE goal_id = ? AND date = ? 
+      GROUP BY date 
+      HAVING SUM(amount) > 0 
+      LIMIT 1
+    `).get(goal.id, todayDateStr)
   );
 
   // days_left, expected_progress, behind_by, is_overdue
@@ -263,9 +274,13 @@ function computeGoalProgress(goal, todayDateStr, todayDateObj) {
     const monday = getWeekMondayDate(todayDateObj);
     const sunday = getWeekSundayDate(todayDateObj);
     const rows = db.prepare(`
-      SELECT COUNT(DISTINCT date) as cnt
-      FROM goal_progress_log
-      WHERE goal_id = ? AND date >= ? AND date <= ?
+      SELECT COUNT(*) as cnt FROM (
+        SELECT date
+        FROM goal_progress_log
+        WHERE goal_id = ? AND date >= ? AND date <= ?
+        GROUP BY date
+        HAVING SUM(amount) > 0
+      )
     `).get(goal.id, monday, sunday);
     const daysThisWeek = rows ? rows.cnt : 0;
     const perWeek = goal.per_week || 1;

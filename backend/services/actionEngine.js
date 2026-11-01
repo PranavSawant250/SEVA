@@ -74,6 +74,15 @@ function findMatchingGoal(query, goals = null) {
 
   const q = query.trim().toLowerCase();
 
+  // Numeric ID direct lookup
+  if (/^\d+$/.test(q)) {
+    const targetId = parseInt(q, 10);
+    const byId = candidatePool.find(g => g.id === targetId);
+    if (byId) return { match: byId, ambiguous: false, candidates: [byId] };
+    const anyById = db.prepare('SELECT * FROM goals WHERE id = ?').get(targetId);
+    if (anyById) return { match: anyById, ambiguous: false, candidates: [anyById] };
+  }
+
   // Synonym mapping
   const synonyms = {
     'dsa': ['dsa', 'leetcode', 'algorithm', 'problem', 'coding'],

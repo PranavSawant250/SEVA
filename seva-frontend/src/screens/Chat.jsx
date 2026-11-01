@@ -58,9 +58,12 @@ export default function Chat() {
   }, [fetchChatHistory]);
 
   // Send Message Handler
-  const handleSendMessage = async (textToSend = inputMsg) => {
+  const handleSendMessage = async (textToSend = inputMsg, existingRequestId = null) => {
     const text = textToSend.trim();
     if (!text || isSending) return;
+
+    // Deterministic Client Request ID: reuse on retry, generate new per fresh send
+    const clientRequestId = existingRequestId || `req-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     // Clear input & error state
     setInputMsg('');
@@ -68,9 +71,10 @@ export default function Chat() {
     setIsSending(true);
 
     // Temp Optimistic User Message
-    const tempUserMsgId = 'temp-' + Date.now();
+    const tempUserMsgId = clientRequestId;
     const tempUserMsg = {
       id: tempUserMsgId,
+      client_request_id: clientRequestId,
       role: 'user',
       message: text,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -80,7 +84,10 @@ export default function Chat() {
     setMessages(prev => [...prev, tempUserMsg]);
 
     try {
-      const res = await client.post('/chat/message', { message: text });
+      const res = await client.post('/chat/message', {
+        message: text,
+        client_request_id: clientRequestId
+      });
       
       if (res.data.success && res.data.reply) {
         // Re-fetch chat history from server to get persistent DB row IDs
@@ -278,7 +285,7 @@ export default function Chat() {
                     
                     {hasFailed && (
                       <span 
-                        onClick={() => handleSendMessage(msg.message)}
+                        onClick={() => handleSendMessage(msg.message, msg.client_request_id || msg.id)}
                         className="text-red-400 font-semibold cursor-pointer hover:underline flex items-center gap-1"
                       >
                         <AlertCircle size={10} /> Failed — Tap to retry

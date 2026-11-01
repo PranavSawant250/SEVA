@@ -109,9 +109,9 @@ router.post('/:id/log', (req, res) => {
     }
 
     if (goal.goal_type === 'frequency') {
-      // One count per day rule: check if already logged today
+      // One count per day rule: check if already logged today with net positive activity
       const existing = db.prepare(
-        'SELECT id FROM goal_progress_log WHERE goal_id = ? AND date = ?'
+        'SELECT 1 FROM goal_progress_log WHERE goal_id = ? AND date = ? GROUP BY date HAVING SUM(amount) > 0'
       ).get(goalId, today);
       if (existing) {
         return res.json({ success: true, message: 'Already logged for today — one session per day counts.', logged: 0 });
