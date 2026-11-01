@@ -286,6 +286,73 @@ try {
   }
 })();
 
+// ─────────────────────────────────────────────────────────────
+// Phase 10 — Session-Scoped Idempotency & Device Security Schema
+// Executed atomically inside a transaction; safe to run on every boot.
+// ─────────────────────────────────────────────────────────────
+(function initPhase10IdempotencySchema() {
+  const applyMigration = db.transaction(() => {
+    // 1. user_devices: Trusted backend device registry with token hashing at rest
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS user_devices (
+        device_id TEXT PRIMARY KEY,
+        token_hash TEXT NOT NULL UNIQUE,
+        user_prn TEXT NOT NULL,
+        device_key TEXT NOT NULL,
+        device_name TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('active', 'revoked')),
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        last_used_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        revoked_at DATETIME NULL,
+        UNIQUE(user_prn, device_key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_user_devices_token ON user_devices(token_hash);
+    `);
+
+    // 2. idempotency_requests: Request envelope with fencing tokens and lease owners
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS idempotency_requests (
+        session_id TEXT NOT NULL,
+        client_request_id TEXT NOT NULL,
+        request_hash TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('pending', 'completed', 'failed')),
+        response_json TEXT NULL,
+        lease_owner TEXT NOT NULL,
+        lease_token INTEGER NOT NULL DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (session_id, client_request_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_idemp_req_lookup 
+        ON idempotency_requests(session_id, client_request_id);
+    `);
+
+    // 3. idempotency_actions: Granular action execution table with composite foreign key
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS idempotency_actions (
+        session_id TEXT NOT NULL,
+        client_request_id TEXT NOT NULL,
+        action_index INTEGER NOT NULL,
+        tool_name TEXT NOT NULL,
+        args_json TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('pending', 'completed', 'failed')),
+        result_json TEXT NULL,
+        lease_token INTEGER NOT NULL DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (session_id, client_request_id, action_index),
+        FOREIGN KEY (session_id, client_request_id) 
+          REFERENCES idempotency_requests(session_id, client_request_id) 
+          ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_idemp_actions_lookup 
+        ON idempotency_actions(session_id, client_request_id);
+    `);
+  });
+
+  applyMigration();
+})();
+
 console.log('✅ SQLite Database initialized and all SEVA tables created in seva.db');
 
 module.exports = db;
