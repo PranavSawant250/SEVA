@@ -244,6 +244,7 @@ Local Offline Fallback (Deterministic Action Engine + Ollama)
 | **Test Suite B** | 62 Live Gemini Tool Calling Tests | **62/62 PASS** | Natural language, multi-turn, quoted speech (B.32) |
 | **Idempotency Suite** | 8 Advanced Idempotency Tests | **8/8 PASS** | Resends, crash resumption, reboot persistence |
 | **Fencing & Auth Audit** | 10 Security & Concurrency Tests | **10/10 PASS** | Interleaved race, stale-worker fencing, token hashing |
+| **Targeted Fencing (Tests A & B)** | Stale Token while Pending + Enrollment Safeguards | **PASS** | Worker A aborted before mutation (0 count), silent replacement blocked (409) |
 
 ---
 
@@ -254,3 +255,4 @@ Local Offline Fallback (Deterministic Action Engine + Ollama)
 - `backend/routes/chat.js` — Express endpoint with device authentication, history assembly, and routing.
 - `backend/scripts/test-idempotency-fencing-audit.js` — Interleaved concurrency, fencing token, and device security tests.
 - `backend/study-notes/phase10-intelligent-chat-tool-calling.md` — This comprehensive reference documentation.
+
