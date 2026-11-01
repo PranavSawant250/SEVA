@@ -492,6 +492,14 @@ function handleNightlyReply(text, todayDateObj = new Date()) {
 
   // ── PHASE 1: await_budget ──────────────────────────────────
   if (state.phase === 'await_budget') {
+    // Check if the reply also specifies explicit tasks or restrictions (e.g. "6 hr and tmrw i have to prepare for my german exam only")
+    const { handleConversationalPlan } = require('./actionEngine');
+    const directPlan = handleConversationalPlan(raw, state.todayDateObj || todayDateObj);
+    if (directPlan !== null) {
+      clearPending();
+      return directPlan;
+    }
+
     const parsed = parseBudgetInput(raw);
     if (!parsed.ok) {
       return parsed.error;
@@ -618,7 +626,15 @@ function handleNightlyReply(text, todayDateObj = new Date()) {
       return formatReviewMessage(state, `✓ Forced into tomorrow's outline: #${s.number} "${s.title}".`);
     }
 
-    // 8. Unrecognized input in review phase — restate valid options without calling AI
+    // 8. Natural language plan update or restriction (e.g. "tommorow i have to prepare for my german exam only and 2 leetcode question only")
+    const { handleConversationalPlan } = require('./actionEngine');
+    const directPlan = handleConversationalPlan(raw, state.todayDateObj || todayDateObj);
+    if (directPlan !== null) {
+      clearPending();
+      return directPlan;
+    }
+
+    // 9. Unrecognized input in review phase — restate valid options without calling AI
     return `I didn't recognize that command during the nightly check-in. Valid replies:\n  • 'add 1, 2' or 'add all' (or 'add sab')\n  • 'add <title fragment>'\n  • 'also add <task> [for N min] [at H:MM AM/PM] [priority high|medium|low]'\n  • 'none' (or 'nahi')\n  • 'done' (or 'confirm' / 'looks good') to save\n  • 'cancel' to abort`;
   }
 

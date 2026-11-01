@@ -2,6 +2,7 @@ const ollama = require('ollama').default || require('ollama');
 const db = require('../database/db');
 const { getTodayDate, getTomorrowDate, minutesToTimeString } = require('../utils/dateUtils');
 const { getAllGoals } = require('./goalsService');
+const { classifyEmail } = require('./emailClassifier');
 
 
 // Preferred model configuration (Standardized on phi3.5 after 5/5 precision test)
@@ -217,7 +218,9 @@ async function processUnanalyzedEmails() {
 
   const updateStmt = db.prepare(`
     UPDATE emails 
-    SET event_type = ?, priority = ?, summary = ?
+    SET event_type = ?, priority = ?, summary = ?,
+        is_personal = ?, importance_category = ?, relevance_score = ?,
+        action_required = ?, matched_identity = ?
     WHERE id = ?
   `);
 
@@ -226,12 +229,31 @@ async function processUnanalyzedEmails() {
   for (const email of unanalyzed) {
     console.log(`🔍 [${count + 1}/${unanalyzed.length}] Analyzing Email ID ${email.id}: "${email.subject.substring(0, 40)}..."`);
 
-    const result = await analyzeEmail(email);
+    // 1. Run deterministic personalized classifier first
+    const classification = classifyEmail(email);
 
-    updateStmt.run(result.event_type, result.priority, result.summary, email.id);
+    // 2. Call Ollama for general extraction if needed, or refine with classification
+    let result = await analyzeEmail(email);
+
+    // If classification found high personal relevance, prioritize personal classifier details
+    const finalPriority = classification.is_personal ? classification.priority : (classification.priority || result.priority);
+    const finalSummary = (classification.is_personal && classification.summary) ? classification.summary : (result.summary || classification.summary);
+    const finalEventType = classification.is_invitation ? 'meeting' : result.event_type;
+
+    updateStmt.run(
+      finalEventType,
+      finalPriority,
+      finalSummary,
+      classification.is_personal,
+      classification.importance_category,
+      classification.relevance_score,
+      classification.action_required,
+      classification.matched_identity,
+      email.id
+    );
     count++;
 
-    console.log(`   └─ Analyzed! Type: ${result.event_type} | Priority: ${result.priority} | Summary: "${result.summary}"`);
+    console.log(`   └─ Analyzed! Type: ${finalEventType} | Priority: ${finalPriority} | Personal: ${classification.is_personal} | Summary: "${finalSummary}"`);
   }
 
   console.log(`✅ Finished AI analysis for ${count} email(s).`);
@@ -393,7 +415,7 @@ async function chatWithSeva(userMessage, currentInsertedMsgId = null, todayDateO
       : 'Nothing planned yet for tomorrow.';
 
     // ── 6. Build system prompt (never trimmed by safety valve) ───────────────────
-    const systemPrompt = `You are SEVA, a warm, intelligent, and helpful personal planning assistant.
+    const systemPrompt = `You are SEVA, a personal productivity assistant.
 
 Today's Date: ${today}
 Tomorrow's Date: ${tomorrow}
@@ -402,20 +424,20 @@ Today's Current Plan: ${planContext}
 Pending Incomplete Tasks Today: ${pendingTasksContext}
 Tasks Already Planned for Tomorrow (${tomorrow}): ${tomorrowTasksContext}
 
-Active Goals (ONLY these goals exist in the database):
+Active Goals:
 ${goalsContext}${
-  summaryContext ? `\n\nPast Daily Summaries (chronological digest):\n${summaryContext}` : ''
+  summaryContext ? `\n\nPast Daily Summaries:\n${summaryContext}` : ''
 }
 
-Instructions:
-- Respond naturally and conversationally.
-- Keep responses concise (2-4 sentences) unless the user explicitly requests details.
-- You may mix Hindi and English (Hinglish) naturally if the user does.
-- Only state goal progress numbers that appear in the context above.
-- If the user asks about a goal that is NOT listed under "Active Goals" above (for example, a Rust goal or any other unlisted goal), state clearly that no such goal exists in your goals list.
-- Strictly ground your responses in the context provided above. Do NOT invent meetings, deadlines, tasks, or plan slots that do not exist.
-- Never confirm details (times, dates, event names) that the user states unless they match your context exactly. If a user mentions a specific time, date, or detail that does NOT match what's in your provided context, explicitly correct them with the ACTUAL scheduled time or state that no event exists at their stated time.
-- If asked about information not present in context, state honestly that you do not have that information.`;
+Rules:
+- Keep responses short, direct, and concise (1 to 2 sentences maximum).
+- Never refer to yourself as "Phi", "an AI language model", or "a language model". Your name is SEVA.
+- For a simple question, answer it directly without extra explanations, advice, or unsolicited recommendations.
+- Do not provide motivational speeches, unsolicited suggestions, or repetitive summaries.
+- Do not repeat active goal lists or tomorrow's tasks unless the user explicitly asks for them.
+- Never add meta-notes, disclaimers, or notes in parentheses (e.g. do NOT output "(Note: ...)").
+- You may speak English or Hinglish naturally if the user does.
+- Strictly ground your responses in real data; do not invent tasks or deadlines.`;
 
     // ── 6. Safety valve: estimate assembled prompt size, trim oldest msgs if needed ─
     // Estimate: system prompt + history + new user message
@@ -485,7 +507,11 @@ Instructions:
       });
     }
 
-    const reply = response.message ? response.message.content.trim() : '';
+    let reply = response.message ? response.message.content.trim() : '';
+    // Post-processing cleanup to strip generic AI disclaimers and meta-notes
+    reply = reply.replace(/^\s*(?:I'm|I am)\s+(?:Phi|an AI|a language model)[^.\n]*[.\n]\s*/i, '');
+    reply = reply.replace(/\n*\(Note:[^)]*\)\s*$/gi, '');
+    reply = reply.trim();
     return reply || "I'm here to help! What would you like to know about your day?";
   } catch (err) {
     console.error('❌ Error in chatWithSeva():', err.message);

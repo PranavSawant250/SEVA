@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const gmailService = require('../services/gmailService');
 const aiService = require('../services/aiService');
+const { classifyEmail, isActionableInvitation } = require('../services/emailClassifier');
 const db = require('../database/db');
 const { getTodayDate } = require('../utils/dateUtils');
 
@@ -73,18 +74,18 @@ router.get('/fetch', async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching emails:', error.message);
-    const isInvalidGrant = error.message?.includes('invalid_grant') || error.details?.includes('invalid_grant');
-    if (isInvalidGrant) {
+    const isAuthError = error.message?.includes('authenticated') || error.message?.includes('OAuth') || error.message?.includes('invalid_grant');
+    if (isAuthError) {
       const tokenPath = require('path').join(__dirname, '..', 'credentials', 'token.json');
-      if (require('fs').existsSync(tokenPath)) {
+      if (error.message?.includes('invalid_grant') && require('fs').existsSync(tokenPath)) {
         try { require('fs').unlinkSync(tokenPath); } catch (e) {}
       }
       return res.status(401).json({
         success: false,
-        error: 'Google OAuth session expired',
-        details: 'invalid_grant',
+        error: 'Not authenticated',
+        details: error.message,
         authUrl: 'http://localhost:3001/api/auth/gmail',
-        message: 'Your Google session has expired. Please re-authenticate at http://localhost:3001/api/auth/gmail'
+        message: 'Please complete OAuth login first by visiting /api/auth/gmail in your browser.'
       });
     }
     res.status(500).json({ error: 'Failed to fetch emails', details: error.message });
@@ -106,23 +107,158 @@ router.get('/analyze', async (req, res) => {
   }
 });
 
-// GET /api/emails/today - Read-only results viewing endpoint (sorted newest first)
+// GET /api/emails/today - Enhanced email viewing with personal relevance and importance filtering
 router.get('/today', (req, res) => {
   try {
-    const emails = db.prepare(`
-      SELECT id, subject, sender, body_preview, event_type, priority, summary, accepted, date, gmail_message_id
+    const filter = (req.query && req.query.filter) ? String(req.query.filter).toLowerCase() : 'all';
+
+    let querySql = `
+      SELECT id, subject, sender, body_preview, event_type, priority, summary, accepted, date, gmail_message_id,
+             is_personal, importance_category, relevance_score, action_required, matched_identity,
+             user_feedback, reviewed, dismissed
       FROM emails
-      ORDER BY id DESC
-    `).all();
+    `;
+
+    const whereClauses = [];
+    if (filter === 'important') {
+      // Personally relevant, high score, or non-defaulter high priority
+      whereClauses.push(`(is_personal = 1 OR relevance_score >= 1.5 OR (priority = 'high' AND subject NOT LIKE '%defaulter%' AND body_preview NOT LIKE '%defaulter%')) AND dismissed = 0`);
+    } else if (filter === 'defaulter') {
+      whereClauses.push(`(importance_category = 'academic_warning' OR subject LIKE '%defaulter%' OR body_preview LIKE '%defaulter%')`);
+    } else if (filter === 'personal') {
+      whereClauses.push(`is_personal = 1`);
+    }
+
+    if (whereClauses.length > 0) {
+      querySql += ` WHERE ${whereClauses.join(' AND ')}`;
+    }
+
+    // Rank: personally relevant and critical action first, then high relevance score, then high priority
+    querySql += `
+      ORDER BY
+        is_personal DESC,
+        relevance_score DESC,
+        CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+        id DESC
+    `;
+
+    const rows = db.prepare(querySql).all();
+
+    // Map rows and dynamically flag is_invitation
+    const emails = rows.map(r => ({
+      ...r,
+      is_invitation: isActionableInvitation(r)
+    }));
 
     res.json({
       success: true,
       count: emails.length,
+      filter,
       emails
     });
   } catch (error) {
     console.error('Error fetching emails from DB:', error);
     res.status(500).json({ error: 'Failed to read emails from database', details: error.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// FEEDBACK & ACTION CONTROLS (Phase 10 & Personalization)
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * POST /api/emails/:id/feedback
+ * Allows user to mark email as:
+ *  - 'important' | 'not_important'
+ *  - 'personal'  | 'not_personal'
+ *  - 'action_required' | 'info_only'
+ * Persists in email_feedback table and updates email row.
+ */
+router.post('/:id/feedback', (req, res) => {
+  try {
+    const emailId = parseInt(req.params.id, 10);
+    const { feedback_type } = req.body || {};
+
+    if (isNaN(emailId)) {
+      return res.status(400).json({ success: false, error: 'Invalid email ID' });
+    }
+
+    const ALLOWED_FEEDBACK = ['important', 'not_important', 'personal', 'not_personal', 'action_required', 'info_only'];
+    if (!feedback_type || !ALLOWED_FEEDBACK.includes(feedback_type)) {
+      return res.status(400).json({
+        success: false,
+        error: `feedback_type must be one of: ${ALLOWED_FEEDBACK.join(', ')}`
+      });
+    }
+
+    const email = db.prepare('SELECT id, sender, subject FROM emails WHERE id = ?').get(emailId);
+    if (!email) {
+      return res.status(404).json({ success: false, error: `Email ${emailId} not found` });
+    }
+
+    // Extract domain if present
+    let domain = null;
+    const domainMatch = (email.sender || '').match(/@([\w.-]+)/);
+    if (domainMatch) domain = domainMatch[1].toLowerCase();
+
+    // Persist to email_feedback
+    db.prepare(`
+      INSERT INTO email_feedback (email_id, sender, domain, subject_pattern, feedback_type)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(emailId, email.sender, domain, email.subject ? email.subject.substring(0, 50) : null, feedback_type);
+
+    // Update emails table
+    db.prepare('UPDATE emails SET user_feedback = ? WHERE id = ?').run(feedback_type, emailId);
+
+    // Re-score the email
+    const reclassification = classifyEmail(email);
+    db.prepare(`
+      UPDATE emails
+      SET relevance_score = ?, priority = ?
+      WHERE id = ?
+    `).run(reclassification.relevance_score, reclassification.priority, emailId);
+
+    return res.json({
+      success: true,
+      message: `Feedback "${feedback_type}" recorded and applied.`,
+      email_id: emailId,
+      updated_score: reclassification.relevance_score
+    });
+  } catch (err) {
+    console.error('Error saving email feedback:', err);
+    return res.status(500).json({ success: false, error: 'Failed to record feedback', details: err.message });
+  }
+});
+
+/**
+ * POST /api/emails/:id/review
+ * Marks an attendance/academic warning email as reviewed by the user.
+ */
+router.post('/:id/review', (req, res) => {
+  try {
+    const emailId = parseInt(req.params.id, 10);
+    if (isNaN(emailId)) return res.status(400).json({ success: false, error: 'Invalid email ID' });
+
+    db.prepare('UPDATE emails SET reviewed = 1 WHERE id = ?').run(emailId);
+    return res.json({ success: true, message: `Email ${emailId} marked as reviewed.` });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: 'Failed to mark email reviewed', details: err.message });
+  }
+});
+
+/**
+ * POST /api/emails/:id/dismiss-alert
+ * Dismisses an email alert from SEVA's active alert view without deleting the email from database.
+ */
+router.post('/:id/dismiss-alert', (req, res) => {
+  try {
+    const emailId = parseInt(req.params.id, 10);
+    if (isNaN(emailId)) return res.status(400).json({ success: false, error: 'Invalid email ID' });
+
+    db.prepare('UPDATE emails SET dismissed = 1 WHERE id = ?').run(emailId);
+    return res.json({ success: true, message: `Email ${emailId} alert dismissed.` });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: 'Failed to dismiss alert', details: err.message });
   }
 });
 
@@ -133,12 +269,8 @@ router.get('/today', (req, res) => {
 /*
  * POST /api/emails/accept/:id
  *
- * Marks the email as accepted (accepted = 1) AND creates a corresponding
- * row in the tasks table so the planning engine only ever needs to look
- * at the tasks table — no separate emails re-query in the planner.
- *
- * Body: none required
- * Response: { success, message, task }
+ * Marks genuine event/task email as accepted (accepted = 1) and creates task.
+ * Safeguard: Attendance reports and defaulter lists cannot be accepted as calendar invitations.
  */
 router.post('/accept/:id', (req, res) => {
   const emailId = parseInt(req.params.id, 10);
@@ -149,7 +281,8 @@ router.post('/accept/:id', (req, res) => {
 
   // 1. Look up the email row
   const email = db.prepare(`
-    SELECT id, subject, sender, event_type, priority, summary, date, accepted
+    SELECT id, subject, sender, body_preview, event_type, priority, summary, date, accepted,
+           importance_category, is_personal
     FROM emails
     WHERE id = ?
   `).get(emailId);
@@ -162,6 +295,15 @@ router.post('/accept/:id', (req, res) => {
     return res.status(409).json({
       error: 'Already accepted',
       message: `Email ${emailId} has already been accepted and added to tasks.`
+    });
+  }
+
+  // Attendance notices & defaulter lists should not display or accept calendar RSVP controls
+  if (email.importance_category === 'academic_warning' && !isActionableInvitation(email)) {
+    return res.status(400).json({
+      success: false,
+      error: 'attendance_not_invitation',
+      message: 'This notice is an attendance/defaulter report, not a calendar invitation. Please use "Mark Reviewed" or "Dismiss Alert".'
     });
   }
 
@@ -222,12 +364,7 @@ router.post('/accept/:id', (req, res) => {
 
 /*
  * POST /api/emails/dismiss/:id
- *
  * Marks the email as dismissed (accepted = 2). No task is created.
- * This is a soft-reject — the email stays in the DB for audit purposes.
- *
- * Body: none required
- * Response: { success, message }
  */
 router.post('/dismiss/:id', (req, res) => {
   const emailId = parseInt(req.params.id, 10);
@@ -260,6 +397,29 @@ router.post('/dismiss/:id', (req, res) => {
   } catch (err) {
     console.error(`❌ Failed to dismiss email ${emailId}:`, err.message);
     res.status(500).json({ error: 'Database update failed', details: err.message });
+  }
+});
+
+/*
+ * DELETE /api/emails/:id
+ * Permanently removes an email record from SEVA.
+ */
+router.delete('/:id', (req, res) => {
+  const emailId = parseInt(req.params.id, 10);
+  if (isNaN(emailId)) {
+    return res.status(400).json({ success: false, error: 'Invalid email ID' });
+  }
+
+  try {
+    const info = db.prepare('DELETE FROM emails WHERE id = ?').run(emailId);
+    if (info.changes === 0) {
+      return res.status(404).json({ success: false, error: `Email ${emailId} not found` });
+    }
+    console.log(`🗑️ Email id=${emailId} permanently removed.`);
+    return res.json({ success: true, message: `Email ${emailId} removed.` });
+  } catch (err) {
+    console.error(`❌ Failed to delete email ${emailId}:`, err.message);
+    return res.status(500).json({ success: false, error: 'Failed to delete email', details: err.message });
   }
 });
 

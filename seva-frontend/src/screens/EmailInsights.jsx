@@ -8,28 +8,34 @@ import {
   Inbox, 
   User, 
   CheckCircle2, 
-  XCircle,
-  Tag
+  ShieldAlert,
+  ThumbsUp,
+  ThumbsDown,
+  Eye,
+  Calendar,
+  Trash2
 } from 'lucide-react';
 import client from '../api/client';
-import { getPriorityBadgeClass, getEventTypeBadgeClass } from '../utils/themeUtils';
+import { getPriorityBadgeClass } from '../utils/themeUtils';
 
 export default function EmailInsights() {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
   const [emails, setEmails] = useState([]);
   const [activeTab, setActiveTab] = useState('pending'); // 'pending' | 'processed'
+  const [filterMode, setFilterMode] = useState('important'); // 'important' | 'all' | 'defaulter' | 'personal'
   
   // Action Loading States
-  const [actionLoading, setActionLoading] = useState({}); // { [emailId]: 'accepting' | 'dismissing' }
+  const [actionLoading, setActionLoading] = useState({}); // { [emailId]: 'action_name' }
   const [fetchingEmails, setFetchingEmails] = useState(false);
   const [syncStatusMsg, setSyncStatusMsg] = useState('');
+  const [selectedEmailDetail, setSelectedEmailDetail] = useState(null);
 
-  // Fetch emails from GET /api/emails/today
-  const fetchEmails = useCallback(async () => {
+  // Fetch emails from GET /api/emails/today with filter
+  const fetchEmails = useCallback(async (currentFilter = filterMode) => {
     setErrorMsg('');
     try {
-      const res = await client.get('/emails/today');
+      const res = await client.get(`/emails/today?filter=${currentFilter}`);
       if (res.data.success) {
         setEmails(res.data.emails || []);
       } else {
@@ -41,24 +47,22 @@ export default function EmailInsights() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [filterMode]);
 
   useEffect(() => {
-    fetchEmails();
-  }, [fetchEmails]);
+    fetchEmails(filterMode);
+  }, [fetchEmails, filterMode]);
 
   // Action: Trigger Sync & AI Analysis
   const handleFetchAndAnalyze = async () => {
     setFetchingEmails(true);
-    setSyncStatusMsg('Syncing Gmail & running AI analysis with Ollama / Phi-3.5...');
+    setSyncStatusMsg('Syncing Gmail & running personalized AI analysis...');
     setErrorMsg('');
 
     try {
-      // Step 1: Fetch recent emails from Gmail & automatically analyze via AI
-      const fetchRes = await client.get('/emails/fetch');
-      
+      await client.get('/emails/fetch');
       setSyncStatusMsg('Sync complete! Refreshing email insights...');
-      await fetchEmails();
+      await fetchEmails(filterMode);
     } catch (err) {
       console.error('[SEVA] Email fetch/analyze error:', err);
       setErrorMsg(err.response?.data?.error || err.response?.data?.message || err.message || 'Email fetch & analysis failed.');
@@ -68,32 +72,30 @@ export default function EmailInsights() {
     }
   };
 
-  // Action: Accept Email (POST /api/emails/accept/:id)
+  // Action: Accept Email (for genuine invitations only)
   const handleAccept = async (id) => {
     setActionLoading(prev => ({ ...prev, [id]: 'accepting' }));
     try {
       const res = await client.post(`/emails/accept/${id}`);
       if (res.data.success) {
-        // Update local stateoptimistically
         setEmails(prev => prev.map(e => e.id === id ? { ...e, accepted: 1 } : e));
       } else {
-        alert(res.data.error || 'Failed to accept email.');
+        alert(res.data.message || res.data.error || 'Failed to accept email.');
       }
     } catch (err) {
       console.error('[SEVA] Email accept error:', err);
-      alert('Failed to accept email: ' + (err.response?.data?.error || err.message));
+      alert('Failed to accept email: ' + (err.response?.data?.message || err.response?.data?.error || err.message));
     } finally {
       setActionLoading(prev => ({ ...prev, [id]: null }));
     }
   };
 
-  // Action: Dismiss Email (POST /api/emails/dismiss/:id)
+  // Action: Dismiss Email from SEVA
   const handleDismiss = async (id) => {
     setActionLoading(prev => ({ ...prev, [id]: 'dismissing' }));
     try {
       const res = await client.post(`/emails/dismiss/${id}`);
       if (res.data.success) {
-        // Update local state
         setEmails(prev => prev.map(e => e.id === id ? { ...e, accepted: 2 } : e));
       } else {
         alert(res.data.error || 'Failed to dismiss email.');
@@ -106,17 +108,82 @@ export default function EmailInsights() {
     }
   };
 
+  // Action: Permanently Delete Email
+  const handleDeleteEmail = async (id) => {
+    if (!window.confirm('Are you sure you want to remove this email?')) return;
+    setActionLoading(prev => ({ ...prev, [id]: 'deleting' }));
+    try {
+      const res = await client.delete(`/emails/${id}`);
+      if (res.data.success) {
+        setEmails(prev => prev.filter(e => e.id !== id));
+      } else {
+        alert(res.data.error || 'Failed to remove email.');
+      }
+    } catch (err) {
+      console.error('[SEVA] Error removing email:', err);
+      alert('Failed to remove email: ' + (err.response?.data?.error || err.message));
+    } finally {
+      setActionLoading(prev => ({ ...prev, [id]: null }));
+    }
+  };
+
+  // Action: Mark as Reviewed (for attendance & academic notices)
+  const handleMarkReviewed = async (id) => {
+    setActionLoading(prev => ({ ...prev, [id]: 'reviewing' }));
+    try {
+      const res = await client.post(`/emails/${id}/review`);
+      if (res.data.success) {
+        setEmails(prev => prev.map(e => e.id === id ? { ...e, reviewed: 1 } : e));
+      }
+    } catch (err) {
+      console.error('[SEVA] Error marking reviewed:', err);
+    } finally {
+      setActionLoading(prev => ({ ...prev, [id]: null }));
+    }
+  };
+
+  // Action: Dismiss Alert (from active alerts list)
+  const handleDismissAlert = async (id) => {
+    setActionLoading(prev => ({ ...prev, [id]: 'dismissing_alert' }));
+    try {
+      const res = await client.post(`/emails/${id}/dismiss-alert`);
+      if (res.data.success) {
+        setEmails(prev => prev.map(e => e.id === id ? { ...e, dismissed: 1 } : e));
+      }
+    } catch (err) {
+      console.error('[SEVA] Error dismissing alert:', err);
+    } finally {
+      setActionLoading(prev => ({ ...prev, [id]: null }));
+    }
+  };
+
+  // Action: User Feedback (Important / Not Important)
+  const handleFeedback = async (id, feedbackType) => {
+    try {
+      const res = await client.post(`/emails/${id}/feedback`, { feedback_type: feedbackType });
+      if (res.data.success) {
+        setEmails(prev => prev.map(e => e.id === id ? { ...e, user_feedback: feedbackType } : e));
+      }
+    } catch (err) {
+      console.error('[SEVA] Feedback error:', err);
+    }
+  };
+
   // Filtered views
-  const pendingEmails = emails.filter(e => e.accepted === 0);
-  const processedEmails = emails.filter(e => e.accepted !== 0);
+  const pendingEmails = emails.filter(e => e.accepted === 0 && e.dismissed === 0);
+  const processedEmails = emails.filter(e => e.accepted !== 0 || e.dismissed === 1 || e.reviewed === 1);
   const displayedEmails = activeTab === 'pending' ? pendingEmails : processedEmails;
 
-  // ── STATE 1: LOADING ──
+  const formatCategory = (cat) => {
+    if (!cat) return 'General';
+    return cat.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+  };
+
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-4">
         <div className="w-10 h-10 border-2 border-accent border-t-transparent rounded-full animate-spin"></div>
-        <p className="font-sans text-sm text-text-secondary">Scanning & analyzing email insights...</p>
+        <p className="font-sans text-sm text-text-secondary">Scanning & analyzing personalized email insights...</p>
       </div>
     );
   }
@@ -132,7 +199,7 @@ export default function EmailInsights() {
           </div>
           <div>
             <h1 className="font-heading font-bold text-3xl text-text-primary">Email Insights</h1>
-            <p className="text-text-secondary text-xs mt-0.5">AI workload extraction from your synced Gmail inbox</p>
+            <p className="text-text-secondary text-xs mt-0.5">Personalized academic and task alerts for Pranav Sawant (PRN: 246100104)</p>
           </div>
         </div>
 
@@ -155,36 +222,24 @@ export default function EmailInsights() {
         </div>
       )}
 
-      {/* ── STATE 2: ERROR ── */}
+      {/* Error Message */}
       {errorMsg && (
         <div className="p-4 bg-red-950/40 border border-red-500/50 rounded-xl flex items-center justify-between gap-3 text-red-400 text-xs">
           <div className="flex items-center gap-2">
             <AlertCircle size={18} className="shrink-0" />
             <span>{errorMsg}</span>
           </div>
-          <div className="flex items-center gap-2">
-            {(errorMsg.toLowerCase().includes('expired') || errorMsg.toLowerCase().includes('authenticated') || errorMsg.toLowerCase().includes('invalid_grant')) && (
-              <a
-                href="http://localhost:3001/api/auth/gmail"
-                target="_blank"
-                rel="noreferrer"
-                className="px-3 py-1 bg-accent/20 hover:bg-accent/30 text-accent rounded-lg border border-accent/40 text-[11px] font-medium transition-all"
-              >
-                Re-authenticate Google
-              </a>
-            )}
-            <button
-              onClick={fetchEmails}
-              className="px-3 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-lg border border-red-500/40 text-[11px] font-medium"
-            >
-              Retry
-            </button>
-          </div>
+          <button
+            onClick={() => fetchEmails(filterMode)}
+            className="px-3 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-lg border border-red-500/40 text-[11px] font-medium"
+          >
+            Retry
+          </button>
         </div>
       )}
 
-      {/* ── Tabs Navigation ── */}
-      <div className="flex items-center justify-between border-b border-gray-800 pb-1">
+      {/* ── Filter Bar & Tabs Navigation ── */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-gray-800 pb-2">
         <div className="flex gap-2">
           <button
             onClick={() => setActiveTab('pending')}
@@ -195,7 +250,7 @@ export default function EmailInsights() {
             }`}
           >
             <Inbox size={14} />
-            <span>Pending ({pendingEmails.length})</span>
+            <span>Active Alerts ({pendingEmails.length})</span>
           </button>
 
           <button
@@ -207,23 +262,51 @@ export default function EmailInsights() {
             }`}
           >
             <CheckCircle2 size={14} />
-            <span>Processed ({processedEmails.length})</span>
+            <span>Reviewed / Archived ({processedEmails.length})</span>
+          </button>
+        </div>
+
+        {/* Filter Mode Pills */}
+        <div className="flex items-center gap-1.5 bg-dark-bg p-1 rounded-xl border border-gray-800 text-xs self-start sm:self-auto">
+          <button
+            onClick={() => setFilterMode('important')}
+            className={`px-3 py-1 rounded-lg font-medium transition-all cursor-pointer ${
+              filterMode === 'important' ? 'bg-accent text-dark-bg font-semibold' : 'text-text-secondary hover:text-text-primary'
+            }`}
+          >
+            Important (Default)
+          </button>
+          <button
+            onClick={() => setFilterMode('personal')}
+            className={`px-3 py-1 rounded-lg font-medium transition-all cursor-pointer ${
+              filterMode === 'personal' ? 'bg-accent text-dark-bg font-semibold' : 'text-text-secondary hover:text-text-primary'
+            }`}
+          >
+            Personal Only
+          </button>
+          <button
+            onClick={() => setFilterMode('all')}
+            className={`px-3 py-1 rounded-lg font-medium transition-all cursor-pointer ${
+              filterMode === 'all' ? 'bg-accent text-dark-bg font-semibold' : 'text-text-secondary hover:text-text-primary'
+            }`}
+          >
+            All Emails
           </button>
         </div>
       </div>
 
-      {/* ── STATE 3: EMPTY STATE ── */}
+      {/* ── Empty State ── */}
       {displayedEmails.length === 0 ? (
         <div className="bg-card-bg border border-gray-800 rounded-2xl p-12 text-center space-y-4">
           <Inbox className="mx-auto text-text-secondary opacity-40" size={48} />
           <div className="space-y-1">
             <h3 className="font-heading font-semibold text-lg text-text-primary">
-              {activeTab === 'pending' ? 'No Pending Email Insights' : 'No Processed Emails'}
+              {activeTab === 'pending' ? 'No Pending Important Alerts' : 'No Processed Emails'}
             </h3>
             <p className="text-text-secondary text-xs max-w-sm mx-auto">
               {activeTab === 'pending'
-                ? 'All incoming emails have been accepted into your tasks or dismissed.'
-                : 'Emails you accept or dismiss will be archived here.'}
+                ? 'All important emails and academic alerts have been reviewed or resolved.'
+                : 'Emails you accept, review, or dismiss will be stored here.'}
             </p>
           </div>
           {activeTab === 'pending' && (
@@ -238,89 +321,228 @@ export default function EmailInsights() {
           )}
         </div>
       ) : (
-        /* ── Emails Card Grid / List ── */
+        /* ── Email Cards ── */
         <div className="space-y-4">
-          {displayedEmails.map((email) => (
-            <div 
-              key={email.id}
-              className={`bg-card-bg border rounded-2xl p-5 space-y-4 transition-all ${
-                email.accepted === 1 
-                  ? 'border-emerald-500/30 bg-emerald-950/10' 
-                  : email.accepted === 2 
-                  ? 'border-gray-800/80 opacity-60' 
-                  : 'border-gray-800 hover:border-accent/40 shadow-lg'
-              }`}
-            >
-              {/* Header: Sender & Badges */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-gray-800/60 pb-3">
-                <div className="flex items-center gap-2 text-xs text-text-secondary">
-                  <User size={14} className="text-accent" />
-                  <span className="font-medium text-text-primary">{email.sender || 'Unknown Sender'}</span>
-                  {email.date && <span className="text-gray-600">• {email.date}</span>}
-                </div>
+          {displayedEmails.map((email) => {
+            const isPersonal = Boolean(email.is_personal);
+            const isInvitation = Boolean(email.is_invitation);
 
-                <div className="flex items-center gap-2">
-                  {/* Event Type Badge */}
-                  <span className={`text-[10px] uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full ${getEventTypeBadgeClass(email.event_type)}`}>
-                    {email.event_type || 'General'}
-                  </span>
-                  
-                  {/* Priority Badge */}
-                  <span className={`text-[10px] uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full ${getPriorityBadgeClass(email.priority)}`}>
-                    {email.priority || 'medium'}
-                  </span>
-                </div>
-              </div>
-
-              {/* Email Body & Summary */}
-              <div className="space-y-2">
-                <h3 className="font-heading font-semibold text-base text-text-primary leading-snug">
-                  {email.subject}
-                </h3>
-                {email.summary && (
-                  <p className="text-text-secondary text-xs leading-relaxed bg-dark-bg/60 p-3 rounded-xl border border-gray-800/80">
-                    <span className="font-semibold text-accent/90">AI Summary: </span>
-                    {email.summary}
-                  </p>
-                )}
-              </div>
-
-              {/* Actions Footer */}
-              <div className="flex items-center justify-between pt-1">
-                {email.accepted === 0 ? (
-                  <div className="flex items-center gap-3 w-full justify-end">
-                    <button
-                      onClick={() => handleDismiss(email.id)}
-                      disabled={actionLoading[email.id] === 'dismissing'}
-                      className="px-4 py-2 bg-dark-bg hover:bg-red-950/40 text-red-400 border border-gray-800 hover:border-red-500/40 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
-                    >
-                      <X size={14} />
-                      <span>{actionLoading[email.id] === 'dismissing' ? 'Dismissing...' : 'Dismiss'}</span>
-                    </button>
-
-                    <button
-                      onClick={() => handleAccept(email.id)}
-                      disabled={actionLoading[email.id] === 'accepting'}
-                      className="px-4 py-2 bg-accent hover:bg-accent/90 text-dark-bg font-heading font-semibold rounded-xl text-xs flex items-center gap-1.5 transition-all shadow-md shadow-accent/20 cursor-pointer disabled:opacity-50"
-                    >
-                      <Check size={14} />
-                      <span>{actionLoading[email.id] === 'accepting' ? 'Accepting...' : 'Accept Task'}</span>
-                    </button>
-                  </div>
-                ) : email.accepted === 1 ? (
-                  <div className="flex items-center gap-1.5 text-xs text-emerald-400 font-semibold bg-emerald-500/10 px-3 py-1 rounded-full border border-emerald-500/30">
-                    <CheckCircle2 size={14} />
-                    <span>Accepted into Task Queue</span>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-1.5 text-xs text-gray-400 font-semibold bg-gray-800/60 px-3 py-1 rounded-full border border-gray-700">
-                    <XCircle size={14} />
-                    <span>Dismissed</span>
+            return (
+              <div 
+                key={email.id}
+                className={`bg-card-bg border rounded-2xl p-5 space-y-4 transition-all relative ${
+                  isPersonal
+                    ? 'border-amber-500/50 bg-gradient-to-br from-card-bg via-amber-950/10 to-card-bg shadow-amber-500/10 shadow-lg'
+                    : email.accepted === 1 
+                    ? 'border-emerald-500/30 bg-emerald-950/10' 
+                    : email.dismissed === 1
+                    ? 'border-gray-800/80 opacity-60'
+                    : 'border-gray-800 hover:border-accent/40 shadow-lg'
+                }`}
+              >
+                {/* Personal Relevance Ribbon */}
+                {isPersonal && (
+                  <div className="flex items-center gap-2 text-xs font-semibold text-amber-400 bg-amber-500/10 border border-amber-500/30 px-3 py-1.5 rounded-xl w-fit">
+                    <ShieldAlert size={14} className="text-amber-400 shrink-0" />
+                    <span>Personally Relevant: {email.matched_identity || 'Student ID Match'}</span>
                   </div>
                 )}
+
+                {/* Header: Sender & Badges */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-gray-800/60 pb-3">
+                  <div className="flex items-center gap-2 text-xs text-text-secondary">
+                    <User size={14} className="text-accent" />
+                    <span className="font-medium text-text-primary">{email.sender || 'Unknown Sender'}</span>
+                    {email.date && <span className="text-gray-600">• {email.date}</span>}
+                  </div>
+
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {/* Importance Category Badge */}
+                    <span className="text-[10px] uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full bg-accent/15 text-accent border border-accent/30">
+                      {formatCategory(email.importance_category)}
+                    </span>
+
+                    {/* Priority Badge */}
+                    <span className={`text-[10px] uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full ${getPriorityBadgeClass(email.priority)}`}>
+                      {email.priority || 'medium'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Email Subject & Summary */}
+                <div className="space-y-2">
+                  <h3 className="font-heading font-semibold text-base text-text-primary leading-snug">
+                    {email.subject}
+                  </h3>
+                  {email.summary && (
+                    <div className="text-text-secondary text-xs leading-relaxed bg-dark-bg/60 p-3 rounded-xl border border-gray-800/80">
+                      <span className="font-semibold text-accent/90">SEVA Insight: </span>
+                      {email.summary}
+                    </div>
+                  )}
+                </div>
+
+                {/* Footer Controls */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-gray-800/50">
+                  {/* User Feedback controls */}
+                  <div className="flex items-center gap-2 text-xs text-text-secondary">
+                    <span className="text-[11px]">Relevance feedback:</span>
+                    <button
+                      onClick={() => handleFeedback(email.id, 'important')}
+                      title="Mark as Important"
+                      className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
+                        email.user_feedback === 'important'
+                          ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+                          : 'border-gray-800 hover:border-gray-700 hover:text-emerald-400'
+                      }`}
+                    >
+                      <ThumbsUp size={13} />
+                    </button>
+                    <button
+                      onClick={() => handleFeedback(email.id, 'not_important')}
+                      title="Mark as Not Important"
+                      className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
+                        email.user_feedback === 'not_important'
+                          ? 'bg-red-500/20 text-red-400 border-red-500/40'
+                          : 'border-gray-800 hover:border-gray-700 hover:text-red-400'
+                      }`}
+                    >
+                      <ThumbsDown size={13} />
+                    </button>
+                    {email.user_feedback && (
+                      <span className="text-[10px] text-gray-500 capitalize">({email.user_feedback})</span>
+                    )}
+                  </div>
+
+                  {/* Context-aware Actions */}
+                  <div className="flex items-center gap-2 self-end sm:self-auto">
+                    {/* View Details modal toggle */}
+                    <button
+                      onClick={() => setSelectedEmailDetail(email)}
+                      className="px-3 py-1.5 bg-dark-bg hover:bg-gray-800 text-text-secondary hover:text-text-primary border border-gray-800 rounded-xl text-xs font-medium flex items-center gap-1.5 transition-all cursor-pointer"
+                    >
+                      <Eye size={13} />
+                      <span>View Details</span>
+                    </button>
+
+                    {/* Controls based on email type */}
+                    {isInvitation ? (
+                      /* Genuine Calendar/Meeting Invitation: Show Accept & Dismiss */
+                      <>
+                        <button
+                          onClick={() => handleDismiss(email.id)}
+                          disabled={actionLoading[email.id] === 'dismissing'}
+                          className="px-3 py-1.5 bg-dark-bg hover:bg-red-950/40 text-red-400 border border-gray-800 hover:border-red-500/40 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+                        >
+                          <X size={13} />
+                          <span>Dismiss</span>
+                        </button>
+                        <button
+                          onClick={() => handleAccept(email.id)}
+                          disabled={actionLoading[email.id] === 'accepting'}
+                          className="px-3 py-1.5 bg-accent hover:bg-accent/90 text-dark-bg font-heading font-semibold rounded-xl text-xs flex items-center gap-1.5 transition-all shadow-md shadow-accent/20 cursor-pointer disabled:opacity-50"
+                        >
+                          <Calendar size={13} />
+                          <span>Accept Invite</span>
+                        </button>
+                      </>
+                    ) : (
+                      /* Academic Warning, Defaulter Notice, or College Notice: Show Mark Reviewed & Dismiss Alert */
+                      <>
+                        {email.reviewed ? (
+                          <span className="text-xs text-emerald-400 flex items-center gap-1 bg-emerald-500/10 px-3 py-1 rounded-xl border border-emerald-500/30">
+                            <CheckCircle2 size={13} /> Reviewed
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => handleMarkReviewed(email.id)}
+                            disabled={actionLoading[email.id] === 'reviewing'}
+                            className="px-3 py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/40 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+                          >
+                            <Check size={13} />
+                            <span>Mark Reviewed</span>
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleDismissAlert(email.id)}
+                          disabled={actionLoading[email.id] === 'dismissing_alert'}
+                          className="px-3 py-1.5 bg-dark-bg hover:bg-gray-800 text-text-secondary border border-gray-800 rounded-xl text-xs font-medium flex items-center gap-1.5 transition-all cursor-pointer"
+                        >
+                          <X size={13} />
+                          <span>Dismiss Alert</span>
+                        </button>
+                      </>
+                    )}
+
+                    {/* Remove / Delete Email button */}
+                    <button
+                      onClick={() => handleDeleteEmail(email.id)}
+                      disabled={actionLoading[email.id] === 'deleting'}
+                      title="Remove from Email Insights"
+                      className="p-1.5 bg-dark-bg hover:bg-red-950/40 text-text-secondary hover:text-red-400 border border-gray-800 hover:border-red-500/40 rounded-xl text-xs transition-all cursor-pointer disabled:opacity-50"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </div>
               </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── View Details Modal ── */}
+      {selectedEmailDetail && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-card-bg border border-gray-800 rounded-2xl max-w-xl w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-gray-800 pb-3">
+              <h3 className="font-heading font-bold text-lg text-text-primary">Email Record Details</h3>
+              <button 
+                onClick={() => setSelectedEmailDetail(null)}
+                className="text-text-secondary hover:text-text-primary p-1 cursor-pointer"
+              >
+                <X size={18} />
+              </button>
             </div>
-          ))}
+            
+            <div className="space-y-3 text-xs">
+              <div>
+                <span className="text-text-secondary block font-semibold mb-1">Subject:</span>
+                <p className="text-text-primary bg-dark-bg p-2.5 rounded-lg border border-gray-800">{selectedEmailDetail.subject}</p>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <span className="text-text-secondary block font-semibold mb-1">Sender:</span>
+                  <p className="text-text-primary bg-dark-bg p-2 rounded-lg border border-gray-800 truncate">{selectedEmailDetail.sender}</p>
+                </div>
+                <div>
+                  <span className="text-text-secondary block font-semibold mb-1">Date:</span>
+                  <p className="text-text-primary bg-dark-bg p-2 rounded-lg border border-gray-800">{selectedEmailDetail.date || 'Today'}</p>
+                </div>
+              </div>
+              <div>
+                <span className="text-text-secondary block font-semibold mb-1">Extracted Preview:</span>
+                <p className="text-text-primary bg-dark-bg p-3 rounded-lg border border-gray-800 whitespace-pre-wrap leading-relaxed max-h-48 overflow-y-auto">
+                  {selectedEmailDetail.body_preview || '(No body preview available)'}
+                </p>
+              </div>
+              {selectedEmailDetail.matched_identity && (
+                <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-300">
+                  <span className="font-semibold block mb-0.5">Personal Identity Match:</span>
+                  <span>{selectedEmailDetail.matched_identity}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-gray-800">
+              <button
+                onClick={() => setSelectedEmailDetail(null)}
+                className="px-4 py-2 bg-dark-bg hover:bg-gray-800 text-text-primary border border-gray-700 rounded-xl text-xs font-semibold cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

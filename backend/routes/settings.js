@@ -184,6 +184,21 @@ router.put('/preferences', (req, res) => {
       }
     }
 
+    if ('user_prn' in req.body) {
+      const prn = req.body.user_prn;
+      if (prn === null || prn === '') {
+        updates.user_prn = null;
+      } else if (typeof prn !== 'string' && typeof prn !== 'number') {
+        return res.status(400).json({ success: false, error: 'user_prn must be a string or number' });
+      } else {
+        const cleanPrn = String(prn).trim();
+        if (!/^[A-Za-z0-9_-]{1,30}$/.test(cleanPrn)) {
+          return res.status(400).json({ success: false, error: 'user_prn: 1-30 chars, alphanumeric only' });
+        }
+        updates.user_prn = cleanPrn;
+      }
+    }
+
     if ('run_slot_start' in req.body) {
       const mins = parseTimeToMinutes(req.body.run_slot_start);
       if (mins === null) return res.status(400).json({ success: false, error: 'run_slot_start must be "H:MM AM/PM"' });

@@ -25,6 +25,7 @@
 const db = require('../database/db');
 const { importGoals, setGoalSteps } = require('./goalsService');
 const { getTodayDate, parseTimeToMinutes, minutesToTimeString } = require('../utils/dateUtils');
+const { processNaturalLanguageAction } = require('./actionEngine');
 
 // ─────────────────────────────────────────────────────────────
 // SERVER-MEMORY PENDING STATE (single user; resets on restart)
@@ -466,35 +467,40 @@ function routeCommand(message, todayDate, now) {
   const nowDate = now || new Date();
   const todayDt = todayDate || new Date();
 
-  // 1. Pending state (removal confirmation or check-in reply)
+  // 1. Natural Language Action Engine (Goal sync, step completion, conversational plan updates, rescheduling, priorities)
+  // Evaluated FIRST so valid natural language operations are never intercepted by a stale session or fall through to AI
+  const actionReply = processNaturalLanguageAction(message, todayDt, nowDate);
+  if (actionReply !== null) return actionReply;
+
+  // 2. Pending state (removal confirmation or check-in reply)
   const pendingReply = handlePendingState(message, todayDt);
   if (pendingReply !== null) return pendingReply;
 
-  // 2. Goal JSON import
+  // 3. Goal JSON import
   const importReply = handleGoalJsonImport(message, todayDt);
   if (importReply !== null) return importReply;
 
-  // 3. Window commands
+  // 4. Window commands
   const windowReply = handleWindowCommands(message, todayDt, nowDate);
   if (windowReply !== null) return windowReply;
 
-  // 4. "call me <name>"
+  // 5. "call me <name>"
   const callMeReply = handleCallMe(message);
   if (callMeReply !== null) return callMeReply;
 
-  // 5. "steps for <goal>: ..."
+  // 6. "steps for <goal>: ..."
   const stepsReply = handleStepsFor(message);
   if (stepsReply !== null) return stepsReply;
 
-  // 6. Removal commands
+  // 7. Removal commands
   const removalReply = handleRemovalCommand(message, todayDt);
   if (removalReply !== null) return removalReply;
 
-  // 7. "plan tomorrow"
+  // 8. "plan tomorrow"
   const planReply = handlePlanTomorrow(message, todayDt);
   if (planReply !== null) return planReply;
 
-  // 8. Fall through to AI
+  // 9. Fall through to AI
   return null;
 }
 

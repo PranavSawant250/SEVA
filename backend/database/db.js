@@ -26,7 +26,26 @@ db.exec(`
     priority TEXT,
     summary TEXT,
     date TEXT,
-    accepted INTEGER DEFAULT 0
+    accepted INTEGER DEFAULT 0,
+    is_personal INTEGER DEFAULT 0,
+    importance_category TEXT DEFAULT 'general',
+    relevance_score REAL DEFAULT 0,
+    action_required INTEGER DEFAULT 0,
+    matched_identity TEXT NULL,
+    user_feedback TEXT NULL,
+    reviewed INTEGER DEFAULT 0,
+    dismissed INTEGER DEFAULT 0
+  );
+
+  -- TABLE 1b: email_feedback (Stores user feedback on importance and personal relevance)
+  CREATE TABLE IF NOT EXISTS email_feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email_id INTEGER NULL,
+    sender TEXT NULL,
+    domain TEXT NULL,
+    subject_pattern TEXT NULL,
+    feedback_type TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 
   -- TABLE 2: tasks (Stores manually added tasks and tasks derived from emails)
@@ -152,13 +171,19 @@ db.exec(`
     run_slot_start         TEXT DEFAULT '6:30 AM',
     default_urgent_minutes INTEGER DEFAULT 90,
     buffer_minutes         INTEGER DEFAULT 15,
-    user_name              TEXT NULL,
+    user_name              TEXT DEFAULT 'Pranav Sawant',
+    user_prn               TEXT DEFAULT '246100104',
     neglect_days           INTEGER DEFAULT 3
   );
 `);
 
-// Seed the single preferences row on first boot
-try { db.exec(`INSERT OR IGNORE INTO preferences (id) VALUES (1);`); } catch (_) {}
+// Seed the single preferences row on first boot with configured identity
+try {
+  db.exec(`INSERT OR IGNORE INTO preferences (id, user_name, user_prn) VALUES (1, 'Pranav Sawant', '246100104');`);
+  // Ensure default identity is populated if row already existed with nulls
+  db.exec(`UPDATE preferences SET user_name = 'Pranav Sawant' WHERE id = 1 AND (user_name IS NULL OR user_name = '');`);
+  db.exec(`UPDATE preferences SET user_prn = '246100104' WHERE id = 1 AND (user_prn IS NULL OR user_prn = '');`);
+} catch (_) {}
 
 // ─────────────────────────────────────────────────────────────
 // Phase 9 additive columns on tasks (guarded per-column).
@@ -192,14 +217,14 @@ try { db.exec(`INSERT OR IGNORE INTO preferences (id) VALUES (1);`); } catch (_)
 })();
 
 // ─────────────────────────────────────────────────────────────
-// Phase 9 additive columns on preferences (guarded per-column).
-// user_name and neglect_days may have been added in a later iteration.
+// Additive columns on preferences (guarded per-column).
 // ─────────────────────────────────────────────────────────────
 (function addPreferencesColumnsIfMissing() {
   const existingCols = db.prepare("PRAGMA table_info(preferences)").all().map(c => c.name);
 
   const newCols = [
-    { name: 'user_name',    sql: "ALTER TABLE preferences ADD COLUMN user_name TEXT NULL" },
+    { name: 'user_name',    sql: "ALTER TABLE preferences ADD COLUMN user_name TEXT DEFAULT 'Pranav Sawant'" },
+    { name: 'user_prn',     sql: "ALTER TABLE preferences ADD COLUMN user_prn TEXT DEFAULT '246100104'" },
     { name: 'neglect_days', sql: "ALTER TABLE preferences ADD COLUMN neglect_days INTEGER DEFAULT 3" },
   ];
 
@@ -207,6 +232,37 @@ try { db.exec(`INSERT OR IGNORE INTO preferences (id) VALUES (1);`); } catch (_)
     if (!existingCols.includes(col.name)) {
       db.exec(col.sql);
       console.log(`  📐 Added column preferences.${col.name}`);
+    }
+  }
+
+  // Populate user_prn and user_name if empty
+  try {
+    db.exec(`UPDATE preferences SET user_name = 'Pranav Sawant' WHERE id = 1 AND (user_name IS NULL OR user_name = '');`);
+    db.exec(`UPDATE preferences SET user_prn = '246100104' WHERE id = 1 AND (user_prn IS NULL OR user_prn = '');`);
+  } catch (_) {}
+})();
+
+// ─────────────────────────────────────────────────────────────
+// Additive columns on emails (guarded per-column).
+// ─────────────────────────────────────────────────────────────
+(function addEmailColumnsIfMissing() {
+  const existingCols = db.prepare("PRAGMA table_info(emails)").all().map(c => c.name);
+
+  const newCols = [
+    { name: 'is_personal',          sql: 'ALTER TABLE emails ADD COLUMN is_personal INTEGER DEFAULT 0' },
+    { name: 'importance_category', sql: "ALTER TABLE emails ADD COLUMN importance_category TEXT DEFAULT 'general'" },
+    { name: 'relevance_score',      sql: 'ALTER TABLE emails ADD COLUMN relevance_score REAL DEFAULT 0' },
+    { name: 'action_required',      sql: 'ALTER TABLE emails ADD COLUMN action_required INTEGER DEFAULT 0' },
+    { name: 'matched_identity',    sql: 'ALTER TABLE emails ADD COLUMN matched_identity TEXT NULL' },
+    { name: 'user_feedback',        sql: 'ALTER TABLE emails ADD COLUMN user_feedback TEXT NULL' },
+    { name: 'reviewed',             sql: 'ALTER TABLE emails ADD COLUMN reviewed INTEGER DEFAULT 0' },
+    { name: 'dismissed',            sql: 'ALTER TABLE emails ADD COLUMN dismissed INTEGER DEFAULT 0' },
+  ];
+
+  for (const col of newCols) {
+    if (!existingCols.includes(col.name)) {
+      db.exec(col.sql);
+      console.log(`  📐 Added column emails.${col.name}`);
     }
   }
 })();
