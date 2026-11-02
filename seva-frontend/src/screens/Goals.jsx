@@ -202,9 +202,9 @@ export default function Goals() {
           )}
           <button
             onClick={() => setShowImportBox(v => !v)}
-            className="px-4 py-2 bg-accent hover:bg-accent/90 text-dark-bg font-heading font-semibold text-xs rounded-xl flex items-center gap-1.5 cursor-pointer transition-all shadow-lg shadow-accent/20"
+            className="px-4 py-2.5 bg-accent hover:bg-accent/90 text-dark-bg font-heading font-semibold text-sm rounded-xl flex items-center gap-1.5 cursor-pointer transition-all"
           >
-            <Upload size={14} />
+            <Upload size={16} />
             <span>{showImportBox ? 'Close Import Box' : 'Paste Goals JSON'}</span>
           </button>
         </div>
@@ -212,16 +212,16 @@ export default function Goals() {
 
       {/* ── Error Banner ── */}
       {errorMsg && (
-        <div className="p-4 bg-red-950/40 border border-red-500/50 rounded-xl flex items-center justify-between gap-3 text-red-400 text-xs">
+        <div className="p-4 bg-red-950/40 border border-red-500/50 rounded-xl flex items-center justify-between gap-3 text-red-400 text-sm">
           <div className="flex items-center gap-2">
-            <AlertCircle size={18} />
+            <AlertCircle size={20} />
             <span>{errorMsg}</span>
           </div>
           <button
             onClick={fetchGoals}
-            className="px-3 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-lg border border-red-500/40 flex items-center gap-1 cursor-pointer"
+            className="px-3.5 py-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-lg border border-red-500/40 flex items-center gap-1 cursor-pointer text-xs"
           >
-            <RefreshCw size={12} />
+            <RefreshCw size={14} />
             <span>Retry</span>
           </button>
         </div>
@@ -229,13 +229,13 @@ export default function Goals() {
 
       {/* ── Paste Goals JSON Box ── */}
       {(showImportBox || visibleGoals.length === 0) && (
-        <div className="bg-card-bg border border-gray-800 rounded-2xl p-6 space-y-4">
+        <div className="bg-card-bg border border-muted rounded-2xl p-6 space-y-4">
           <div className="flex items-center justify-between">
             <div>
-              <h3 className="font-heading font-semibold text-base text-text-primary">
+              <h3 className="font-heading font-semibold text-lg text-text-primary">
                 Import Monthly Goals JSON
               </h3>
-              <p className="text-xs text-text-secondary mt-0.5">
+              <p className="text-sm text-text-secondary mt-0.5">
                 Paste a JSON object with <code className="text-accent">month</code> and a <code className="text-accent">goals</code> array (up to 30 goals).
               </p>
             </div>
@@ -247,11 +247,11 @@ export default function Goals() {
               value={jsonInput}
               onChange={e => setJsonInput(e.target.value)}
               placeholder={`{\n  "month": "October 2026",\n  "goals": [\n    {"category":"Technical","title":"Spring Boot Basics","target":"Controllers, Services, Repositories done","deadline":"2026-10-15","priority":"high"}\n  ]\n}`}
-              className="w-full bg-dark-bg border border-gray-800 rounded-xl p-3.5 text-xs font-mono text-text-primary focus:outline-none focus:border-accent"
+              className="w-full bg-navy border border-muted rounded-xl p-3.5 text-sm font-mono text-text-primary focus:outline-none focus:border-accent"
             />
             {importFeedback && (
               <div
-                className={`p-3 rounded-xl text-xs ${
+                className={`p-3.5 rounded-xl text-sm ${
                   importFeedback.type === 'success'
                     ? 'bg-emerald-950/40 border border-emerald-500/40 text-emerald-300'
                     : 'bg-red-950/40 border border-red-500/40 text-red-300'
@@ -264,7 +264,7 @@ export default function Goals() {
               <button
                 type="submit"
                 disabled={importing || !jsonInput.trim()}
-                className="px-5 py-2 bg-accent hover:bg-accent/90 text-dark-bg font-heading font-semibold text-xs rounded-xl cursor-pointer disabled:opacity-50"
+                className="px-5 py-2.5 bg-accent hover:bg-accent/90 text-dark-bg font-heading font-semibold text-sm rounded-xl cursor-pointer disabled:opacity-50"
               >
                 {importing ? 'Importing...' : 'Import Goals'}
               </button>
@@ -275,10 +275,10 @@ export default function Goals() {
 
       {/* ── Empty State ── */}
       {visibleGoals.length === 0 && (
-        <div className="bg-card-bg border border-gray-800 rounded-2xl p-10 text-center space-y-3">
-          <Target size={40} className="text-accent mx-auto opacity-70" />
-          <h3 className="font-heading font-semibold text-lg text-text-primary">No Active Goals Yet</h3>
-          <p className="text-xs text-text-secondary max-w-md mx-auto">
+        <div className="bg-card-bg border border-muted rounded-2xl p-10 text-center space-y-3">
+          <Target size={44} className="text-accent mx-auto opacity-70" />
+          <h3 className="font-heading font-semibold text-xl text-text-primary">No Active Goals Yet</h3>
+          <p className="text-sm text-text-secondary max-w-md mx-auto">
             Paste your monthly goals JSON above or in Chat to start scheduling daily work blocks automatically.
           </p>
         </div>
@@ -288,10 +288,10 @@ export default function Goals() {
       {Object.entries(groupedByCategory).map(([category, catGoals]) => (
         <div key={category} className="space-y-4">
           <div className="flex items-center gap-2">
-            <h2 className="font-heading font-bold text-lg text-text-primary tracking-wide">
+            <h2 className="font-heading font-bold text-xl text-text-primary tracking-wide">
               {category}
             </h2>
-            <span className="text-xs text-text-secondary bg-card-bg border border-gray-800 px-2.5 py-0.5 rounded-full">
+            <span className="text-sm text-text-secondary bg-navy border border-muted px-2.5 py-0.5 rounded-full">
               {catGoals.length}
             </span>
           </div>
@@ -308,52 +308,52 @@ export default function Goals() {
                   key={goal.id}
                   className={`bg-card-bg border rounded-2xl p-5 space-y-4 transition-all ${
                     isRemoved
-                      ? 'border-gray-800/50 opacity-60'
+                      ? 'border-muted opacity-60'
                       : isCompleted
                       ? 'border-emerald-500/40'
                       : goal.is_overdue
                       ? 'border-red-500/40'
-                      : 'border-gray-800/90 hover:border-gray-700'
+                      : 'border-muted hover:border-gray-600'
                   }`}
                 >
                   {/* Card Top: Title + Priority + Deadline/Overdue */}
                   <div className="flex items-start justify-between gap-3">
                     <div className="space-y-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <h3 className="font-heading font-semibold text-base text-text-primary">
+                        <h3 className="font-heading font-semibold text-lg text-text-primary">
                           {goal.title}
                         </h3>
-                        <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${getPriorityBadgeClass(goal.priority)}`}>
+                        <span className={`text-xs font-bold uppercase px-2 py-0.5 rounded-full ${getPriorityBadgeClass(goal.priority)}`}>
                           {goal.priority}
                         </span>
                         {isRemoved && (
-                          <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-gray-800 text-gray-400">
+                          <span className="text-xs font-bold uppercase px-2 py-0.5 rounded-full bg-panelLight text-gray-400">
                             Removed
                           </span>
                         )}
                         {isCompleted && (
-                          <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                          <span className="text-xs font-bold uppercase px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
                             Completed
                           </span>
                         )}
                       </div>
                       {goal.target_text && (
-                        <p className="text-xs text-text-secondary">{goal.target_text}</p>
+                        <p className="text-sm text-text-secondary">{goal.target_text}</p>
                       )}
                     </div>
 
                     {/* Deadline / Days Left Badge */}
                     <div className="text-right shrink-0">
                       {goal.is_overdue && !isCompleted ? (
-                        <span className="text-[11px] font-bold uppercase px-2.5 py-1 rounded-lg bg-red-500/20 text-red-300 border border-red-500/40">
+                        <span className="text-xs font-bold uppercase px-2.5 py-1 rounded-lg bg-red-500/20 text-red-300 border border-red-500/40">
                           OVERDUE
                         </span>
                       ) : (
-                        <span className="text-xs font-mono text-text-secondary bg-dark-bg px-2.5 py-1 rounded-lg border border-gray-800">
+                        <span className="text-sm font-mono text-text-secondary bg-navy px-2.5 py-1 rounded-lg border border-muted">
                           {goal.days_left !== null ? `${goal.days_left}d left` : goal.deadline}
                         </span>
                       )}
-                      <div className="text-[10px] text-text-secondary mt-1">
+                      <div className="text-xs text-text-secondary mt-1">
                         Due {goal.deadline}
                       </div>
                     </div>
@@ -361,13 +361,13 @@ export default function Goals() {
 
                   {/* Progress Bar + Auto/Manual Badge + Expected Marker */}
                   <div className="space-y-1.5">
-                    <div className="flex items-center justify-between text-xs">
+                    <div className="flex items-center justify-between text-sm">
                       <div className="flex items-center gap-2">
-                        <span className="font-heading font-bold text-text-primary">
+                        <span className="font-heading font-bold text-text-primary text-base">
                           {goal.progress}%
                         </span>
                         <span
-                          className={`text-[10px] uppercase font-semibold px-2 py-0.5 rounded ${
+                          className={`text-xs uppercase font-semibold px-2 py-0.5 rounded ${
                             isManual
                               ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
                               : 'bg-accent/10 text-accent border border-accent/25'
@@ -376,18 +376,18 @@ export default function Goals() {
                           {isManual ? 'Manual' : 'Auto'}
                         </span>
                         {goal.goal_type === 'count' && (
-                          <span className="text-xs text-text-secondary font-mono">
+                          <span className="text-sm text-text-secondary font-mono">
                             {goal.current_count}/{goal.target_count}
                           </span>
                         )}
                         {goal.goal_type === 'frequency' && (
-                          <span className="text-xs text-text-secondary font-mono">
+                          <span className="text-sm text-text-secondary font-mono">
                             {goal.days_this_week || 0}/{goal.per_week} this week
                           </span>
                         )}
                       </div>
 
-                      <div className="text-[11px] text-text-secondary">
+                      <div className="text-xs text-text-secondary">
                         Expected: <span className="text-text-primary font-medium">{goal.expected_progress}%</span>
                         {goal.behind_by > 0 && goal.progress_source !== 'no_progress_data' && (
                           <span className="text-amber-400 ml-1.5">(-{goal.behind_by}%)</span>
@@ -396,7 +396,7 @@ export default function Goals() {
                     </div>
 
                     {/* Progress Track with Expected Marker */}
-                    <div className="relative h-2.5 w-full bg-dark-bg rounded-full overflow-hidden border border-gray-800">
+                    <div className="relative h-2.5 w-full bg-navy rounded-full overflow-hidden border border-muted">
                       <div
                         className={`h-full rounded-full transition-all duration-300 ${
                           isCompleted
@@ -428,12 +428,12 @@ export default function Goals() {
                               type="button"
                               disabled={isBusy || isRemoved}
                               onClick={() => handleToggleStep(goal.id, step.id, step.done)}
-                              className="w-full flex items-center gap-2.5 p-2 rounded-xl bg-dark-bg/70 hover:bg-dark-bg border border-gray-800/80 text-left text-xs transition-all cursor-pointer"
+                              className="w-full flex items-center gap-2.5 p-2 rounded-xl bg-navy hover:bg-panelLight border border-muted text-left text-sm transition-all cursor-pointer"
                             >
                               {step.done === 1 ? (
-                                <CheckCircle2 size={15} className="text-emerald-400 shrink-0" />
+                                <CheckCircle2 size={16} className="text-emerald-400 shrink-0" />
                               ) : (
-                                <Circle size={15} className="text-text-secondary shrink-0" />
+                                <Circle size={16} className="text-text-secondary shrink-0" />
                               )}
                               <span
                                 className={
@@ -448,7 +448,7 @@ export default function Goals() {
                           ))}
                         </div>
                       ) : (
-                        <div className="p-2.5 rounded-xl bg-dark-bg/50 border border-gray-800 text-[11px] text-text-secondary">
+                        <div className="p-2.5 rounded-xl bg-navy border border-muted text-xs text-text-secondary">
                           No steps defined yet. Set manual progress below or say{' '}
                           <code className="text-accent">steps for {goal.title}: step 1; step 2</code> in Chat.
                         </div>
@@ -457,15 +457,15 @@ export default function Goals() {
                   )}
 
                   {/* Quick Actions Row */}
-                  <div className="pt-2 border-t border-gray-800/80 flex flex-wrap items-center justify-between gap-2">
+                  <div className="pt-2 border-t border-muted flex flex-wrap items-center justify-between gap-2">
                     <div className="flex flex-wrap items-center gap-2">
                       {!isRemoved && !isCompleted && goal.goal_type === 'count' && (
                         <button
                           onClick={() => handleLogProgress(goal.id, 1)}
                           disabled={isBusy}
-                          className="px-3 py-1.5 bg-accent/15 hover:bg-accent/25 text-accent border border-accent/30 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-all"
+                          className="px-3.5 py-1.5 bg-accent/15 hover:bg-accent/25 text-accent border border-accent/30 rounded-lg text-sm font-semibold flex items-center gap-1 cursor-pointer transition-all"
                         >
-                          <Plus size={13} />
+                          <Plus size={14} />
                           <span>+1 Problem</span>
                         </button>
                       )}
@@ -474,9 +474,9 @@ export default function Goals() {
                         <button
                           onClick={() => handleLogProgress(goal.id, 1)}
                           disabled={isBusy || goal.last_logged_today}
-                          className="px-3 py-1.5 bg-accent/15 hover:bg-accent/25 text-accent border border-accent/30 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-all disabled:opacity-50"
+                          className="px-3.5 py-1.5 bg-accent/15 hover:bg-accent/25 text-accent border border-accent/30 rounded-lg text-sm font-semibold flex items-center gap-1 cursor-pointer transition-all disabled:opacity-50"
                         >
-                          <CheckCircle2 size={13} />
+                          <CheckCircle2 size={14} />
                           <span>{goal.last_logged_today ? 'Logged Today' : 'Done today'}</span>
                         </button>
                       )}

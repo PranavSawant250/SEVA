@@ -546,29 +546,29 @@ const TOOLS = [
 
   {
     name: 'log_goal_progress',
-    description: 'Log newly completed problems or units for a count goal (e.g. solved 2 DSA problems, completed 1 unit).',
+    description: 'Log newly completed problems or units for a count goal (e.g. solved 2 DSA problems), or 1 session for a frequency goal (e.g. ran today, 5km run). For frequency goals like running, 1 run counts as 1 session regardless of distance.',
     parameters: {
       type: 'OBJECT',
       properties: {
         goal_identifier: {
           type: 'STRING',
-          description: 'Goal title, keyword (e.g. "LeetCode", "DSA"), or goal ID.'
+          description: 'Goal title, keyword (e.g. "LeetCode", "DSA", "Daily run", "run"), or goal ID.'
         },
         amount: {
           type: 'INTEGER',
-          description: 'Number of units/problems completed (must be a positive integer, e.g. 1, 2, 5).'
+          description: 'Number of units/problems or sessions completed (default 1 for frequency goals like running).'
         },
         note: {
           type: 'STRING',
-          description: 'Optional audit note.'
+          description: 'Optional audit note (e.g. "5 km").'
         }
       },
-      required: ['goal_identifier', 'amount']
+      required: ['goal_identifier']
     },
     handler: async (args, context) => {
-      const amount = parseInt(args.amount, 10);
+      let amount = parseInt(args.amount, 10);
       if (isNaN(amount) || amount <= 0) {
-        return { success: false, error: 'Amount must be a positive integer greater than zero.' };
+        amount = 1;
       }
 
       const q = (args.goal_identifier || '').trim();
@@ -588,9 +588,23 @@ const TOOLS = [
       }
 
       const todayStr = getTodayDate(context.todayDate);
+      const isFrequency = goal.goal_type === 'frequency';
+
+      // For frequency goals, amount is strictly the number of sessions (1 per run), not distance
+      let effectiveAmount = amount;
+      let auditNote = args.note || 'agent:log_goal_progress';
+      if (isFrequency) {
+        effectiveAmount = 1;
+        if (amount > 1 && (!args.note || args.note === 'agent:log_goal_progress')) {
+          auditNote = `${amount} km`;
+        } else if (args.note && !auditNote.includes('km') && amount > 1) {
+          auditNote = `${amount} km - ${args.note}`;
+        }
+      }
+
       const currentCount = goal.current_count || 0;
-      const targetCount = goal.target_count || 1;
-      const newCount = currentCount + amount;
+      const targetCount = isFrequency ? (goal.per_week || 5) : (goal.target_count || 1);
+      const newCount = currentCount + effectiveAmount;
       const reached = newCount >= targetCount;
 
       let msgIdNum = null;
@@ -610,7 +624,7 @@ const TOOLS = [
         db.prepare(`
           INSERT INTO goal_progress_log (goal_id, date, amount, note, chat_message_id)
           VALUES (?, ?, ?, ?, ?)
-        `).run(goal.id, todayStr, amount, args.note || 'agent:log_goal_progress', msgIdNum);
+        `).run(goal.id, todayStr, effectiveAmount, auditNote, msgIdNum);
 
         // Check if today has a corresponding task to mark complete
         const task = db.prepare(`
@@ -627,16 +641,18 @@ const TOOLS = [
       tx();
 
       const cleanTitle = goal.title.replace(/\s*(?:320|\d+|practice|topic)\s*/gi, '').trim() || goal.title;
+      const unitLabel = isFrequency ? 'session' : 'problems';
       const replyMsg = reached
-        ? `Logged ${amount} problems. ${cleanTitle} target reached: ${newCount}/${targetCount}!`
-        : `Logged ${amount} problems. ${cleanTitle} progress: ${currentCount}/${targetCount} → ${newCount}/${targetCount}.`;
+        ? `Logged ${effectiveAmount} ${unitLabel}. ${cleanTitle} target reached: ${newCount}/${targetCount}!`
+        : `Logged ${effectiveAmount} ${unitLabel}. ${cleanTitle} progress: ${currentCount}/${targetCount} → ${newCount}/${targetCount}.`;
 
       return {
         success: true,
         message: replyMsg,
         goal_id: goal.id,
         goal_title: goal.title,
-        amount,
+        amount: effectiveAmount,
+        note: auditNote,
         previous_count: currentCount,
         new_count: newCount,
         target_count: targetCount,
@@ -1051,18 +1067,43 @@ const TOOLS = [
 
       let target = null;
       if (type === 'goal') {
+        if (/^(?:all\s+my\s+goals|all\s+goals|all)$/i.test(q)) {
+          const activeGoals = db.prepare("SELECT id, title FROM goals WHERE status = 'active'").all();
+          if (activeGoals.length === 0) return { success: false, error: 'No active goals found to remove.' };
+          const targetIds = activeGoals.map(g => g.id);
+          const goalListDesc = activeGoals.map(g => `"${g.title}" (ID: ${g.id})`).join(', ');
+          setPendingState({
+            type: 'removal',
+            removalType: 'goal',
+            targetId: targetIds[0],
+            targetIds,
+            targetTitle: `all active goals [${goalListDesc}]`,
+            todayStr,
+            expiresAt: Date.now() + 2 * 60 * 1000
+          });
+          return {
+            success: true,
+            pending_confirmation: true,
+            message: `Remove all ${activeGoals.length} active goals (${goalListDesc})? Reply yes to confirm (or no to cancel). This expires in 2 minutes.`,
+            target_ids: targetIds,
+            target_titles: activeGoals.map(g => g.title)
+          };
+        }
         const { match, ambiguous, candidates } = findMatchingGoal(q);
         if (ambiguous) {
-          return { success: false, ambiguous: true, error: `Multiple goals match "${q}". Please specify which one.` };
+          const titles = candidates.map(c => `"${c.title}"`).join(' or ');
+          return { success: false, ambiguous: true, error: `Multiple goals match "${q}": ${titles}. Please specify which one.` };
         }
         if (!match) return { success: false, error: `No active goal found matching "${q}".` };
-        target = { id: match.id, title: match.title };
+        target = { id: match.id, targetIds: [match.id], title: match.title };
       } else {
-        const rows = db.prepare('SELECT id, name FROM tasks WHERE LOWER(name) LIKE ? AND date >= ? AND completed = 0').all(`%${q.toLowerCase()}%`, todayStr);
+        const cleanQ = q.replace(/\b(?:task|item|assignment|session)\b/gi, '').trim();
+        const searchTerm = cleanQ.length > 0 ? cleanQ : q;
+        const rows = db.prepare('SELECT id, name FROM tasks WHERE LOWER(name) LIKE ? AND date >= ? AND completed = 0').all(`%${searchTerm.toLowerCase()}%`, todayStr);
         if (rows.length === 0) return { success: false, error: `No incomplete tasks found matching "${q}".` };
-        const uniqueTitles = [...new Set(rows.map(r => r.name.trim().toLowerCase()))];
+        const uniqueTitles = [...new Set(rows.map(r => r.name.trim()))];
         if (uniqueTitles.length > 1) {
-          return { success: false, ambiguous: true, error: `Multiple tasks match "${q}": ${uniqueTitles.join(', ')}. Please specify which one.` };
+          return { success: false, ambiguous: true, error: `Multiple tasks match "${q}": ${uniqueTitles.map(t => `"${t}"`).join(', ')}. Please specify which one you want to delete.` };
         }
         target = { id: rows[0].id, targetIds: rows.map(r => r.id), title: rows[0].name };
       }

@@ -153,14 +153,17 @@ function executeRemoval(state) {
   const todayStr = state.todayStr;
 
   if (state.removalType === 'goal') {
-    // Soft-remove the goal
-    db.prepare("UPDATE goals SET status='removed' WHERE id=?").run(state.targetId);
-    // Delete INCOMPLETE tasks dated today or later
-    db.prepare(`
-      DELETE FROM tasks WHERE goal_id = ? AND completed = 0
-      AND date >= ?
-    `).run(state.targetId, todayStr);
-    return `✓ Goal "${state.targetTitle}" removed. Completed tasks and progress history are preserved. You can restore it from the Goals screen.`;
+    const targetIds = Array.isArray(state.targetIds) && state.targetIds.length > 0 ? state.targetIds : [state.targetId];
+    const updateGoalStmt = db.prepare("UPDATE goals SET status='removed' WHERE id = ?");
+    const delTaskStmt = db.prepare("DELETE FROM tasks WHERE goal_id = ? AND completed = 0 AND date >= ?");
+    const tx = db.transaction(() => {
+      for (const id of targetIds) {
+        updateGoalStmt.run(id);
+        delTaskStmt.run(id, todayStr);
+      }
+    });
+    tx();
+    return `✓ Goal(s) "${state.targetTitle}" removed. Completed tasks and progress history are preserved. You can restore from the Goals screen.`;
   }
 
   if (state.removalType === 'task') {

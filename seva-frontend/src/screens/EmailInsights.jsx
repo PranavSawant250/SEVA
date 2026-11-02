@@ -192,14 +192,14 @@ export default function EmailInsights() {
     <div className="space-y-6 max-w-5xl pb-10">
       
       {/* ── Page Header ── */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-gray-800 pb-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-muted pb-6">
         <div className="flex items-center gap-3">
           <div className="p-2.5 bg-accent/10 border border-accent/30 rounded-xl text-accent">
-            <Mail size={26} style={{ filter: 'drop-shadow(0 0 6px rgba(0,217,255,0.5))' }} />
+            <Mail size={26} />
           </div>
           <div>
             <h1 className="font-heading font-bold text-3xl text-text-primary">Email Insights</h1>
-            <p className="text-text-secondary text-xs mt-0.5">Personalized academic and task alerts for Pranav Sawant (PRN: 246100104)</p>
+            <p className="text-text-secondary text-sm mt-0.5">Personalized academic and task alerts for Pranav Sawant (PRN: 246100104)</p>
           </div>
         </div>
 
@@ -207,7 +207,7 @@ export default function EmailInsights() {
         <button
           onClick={handleFetchAndAnalyze}
           disabled={fetchingEmails}
-          className="px-4 py-2.5 bg-accent hover:bg-accent/90 text-dark-bg font-heading font-semibold text-xs rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-accent/20 disabled:opacity-50 self-start sm:self-auto"
+          className="px-4 py-2.5 bg-accent hover:bg-accent/90 text-dark-bg font-heading font-semibold text-sm rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 self-start sm:self-auto"
         >
           <RefreshCw size={16} className={fetchingEmails ? 'animate-spin' : ''} />
           <span>{fetchingEmails ? 'Syncing Gmail & AI...' : 'Fetch New Emails'}</span>
@@ -216,22 +216,22 @@ export default function EmailInsights() {
 
       {/* Sync Status Banner */}
       {syncStatusMsg && (
-        <div className="p-4 bg-accent/10 border border-accent/40 rounded-xl flex items-center gap-3 text-accent text-xs animate-pulse">
-          <RefreshCw size={16} className="animate-spin shrink-0" />
+        <div className="p-4 bg-accent/10 border border-accent/40 rounded-xl flex items-center gap-3 text-accent text-sm animate-pulse">
+          <RefreshCw size={18} className="animate-spin shrink-0" />
           <span>{syncStatusMsg}</span>
         </div>
       )}
 
       {/* Error Message */}
       {errorMsg && (
-        <div className="p-4 bg-red-950/40 border border-red-500/50 rounded-xl flex items-center justify-between gap-3 text-red-400 text-xs">
+        <div className="p-4 bg-red-950/40 border border-red-500/50 rounded-xl flex items-center justify-between gap-3 text-red-400 text-sm">
           <div className="flex items-center gap-2">
-            <AlertCircle size={18} className="shrink-0" />
+            <AlertCircle size={20} className="shrink-0" />
             <span>{errorMsg}</span>
           </div>
           <button
             onClick={() => fetchEmails(filterMode)}
-            className="px-3 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-lg border border-red-500/40 text-[11px] font-medium"
+            className="px-3.5 py-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-lg border border-red-500/40 text-xs font-medium"
           >
             Retry
           </button>
@@ -239,38 +239,38 @@ export default function EmailInsights() {
       )}
 
       {/* ── Filter Bar & Tabs Navigation ── */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-gray-800 pb-2">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-muted pb-2">
         <div className="flex gap-2">
           <button
             onClick={() => setActiveTab('pending')}
-            className={`px-4 py-2 text-xs font-semibold rounded-t-xl transition-all cursor-pointer flex items-center gap-2 border-b-2 ${
+            className={`px-4 py-2 text-sm font-semibold rounded-t-xl transition-all cursor-pointer flex items-center gap-2 border-b-2 ${
               activeTab === 'pending'
                 ? 'border-accent text-accent bg-accent/5'
                 : 'border-transparent text-text-secondary hover:text-text-primary'
             }`}
           >
-            <Inbox size={14} />
+            <Inbox size={16} />
             <span>Active Alerts ({pendingEmails.length})</span>
           </button>
 
           <button
             onClick={() => setActiveTab('processed')}
-            className={`px-4 py-2 text-xs font-semibold rounded-t-xl transition-all cursor-pointer flex items-center gap-2 border-b-2 ${
+            className={`px-4 py-2 text-sm font-semibold rounded-t-xl transition-all cursor-pointer flex items-center gap-2 border-b-2 ${
               activeTab === 'processed'
                 ? 'border-accent text-accent bg-accent/5'
                 : 'border-transparent text-text-secondary hover:text-text-primary'
             }`}
           >
-            <CheckCircle2 size={14} />
+            <CheckCircle2 size={16} />
             <span>Reviewed / Archived ({processedEmails.length})</span>
           </button>
         </div>
 
         {/* Filter Mode Pills */}
-        <div className="flex items-center gap-1.5 bg-dark-bg p-1 rounded-xl border border-gray-800 text-xs self-start sm:self-auto">
+        <div className="flex items-center gap-1.5 bg-navy p-1 rounded-xl border border-muted text-sm self-start sm:self-auto">
           <button
             onClick={() => setFilterMode('important')}
-            className={`px-3 py-1 rounded-lg font-medium transition-all cursor-pointer ${
+            className={`px-3.5 py-1.5 rounded-lg font-medium transition-all cursor-pointer ${
               filterMode === 'important' ? 'bg-accent text-dark-bg font-semibold' : 'text-text-secondary hover:text-text-primary'
             }`}
           >
@@ -278,7 +278,7 @@ export default function EmailInsights() {
           </button>
           <button
             onClick={() => setFilterMode('personal')}
-            className={`px-3 py-1 rounded-lg font-medium transition-all cursor-pointer ${
+            className={`px-3.5 py-1.5 rounded-lg font-medium transition-all cursor-pointer ${
               filterMode === 'personal' ? 'bg-accent text-dark-bg font-semibold' : 'text-text-secondary hover:text-text-primary'
             }`}
           >
@@ -286,7 +286,7 @@ export default function EmailInsights() {
           </button>
           <button
             onClick={() => setFilterMode('all')}
-            className={`px-3 py-1 rounded-lg font-medium transition-all cursor-pointer ${
+            className={`px-3.5 py-1.5 rounded-lg font-medium transition-all cursor-pointer ${
               filterMode === 'all' ? 'bg-accent text-dark-bg font-semibold' : 'text-text-secondary hover:text-text-primary'
             }`}
           >
@@ -332,38 +332,38 @@ export default function EmailInsights() {
                 key={email.id}
                 className={`bg-card-bg border rounded-2xl p-5 space-y-4 transition-all relative ${
                   isPersonal
-                    ? 'border-amber-500/50 bg-gradient-to-br from-card-bg via-amber-950/10 to-card-bg shadow-amber-500/10 shadow-lg'
+                    ? 'border-amber-500/50 bg-card-bg'
                     : email.accepted === 1 
                     ? 'border-emerald-500/30 bg-emerald-950/10' 
                     : email.dismissed === 1
-                    ? 'border-gray-800/80 opacity-60'
-                    : 'border-gray-800 hover:border-accent/40 shadow-lg'
+                    ? 'border-muted opacity-60'
+                    : 'border-muted hover:border-gray-600'
                 }`}
               >
                 {/* Personal Relevance Ribbon */}
                 {isPersonal && (
-                  <div className="flex items-center gap-2 text-xs font-semibold text-amber-400 bg-amber-500/10 border border-amber-500/30 px-3 py-1.5 rounded-xl w-fit">
-                    <ShieldAlert size={14} className="text-amber-400 shrink-0" />
+                  <div className="flex items-center gap-2 text-sm font-semibold text-amber-400 bg-amber-500/10 border border-amber-500/30 px-3 py-1.5 rounded-xl w-fit">
+                    <ShieldAlert size={16} className="text-amber-400 shrink-0" />
                     <span>Personally Relevant: {email.matched_identity || 'Student ID Match'}</span>
                   </div>
                 )}
 
                 {/* Header: Sender & Badges */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-gray-800/60 pb-3">
-                  <div className="flex items-center gap-2 text-xs text-text-secondary">
-                    <User size={14} className="text-accent" />
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-muted pb-3">
+                  <div className="flex items-center gap-2 text-sm text-text-secondary">
+                    <User size={16} className="text-accent" />
                     <span className="font-medium text-text-primary">{email.sender || 'Unknown Sender'}</span>
-                    {email.date && <span className="text-gray-600">• {email.date}</span>}
+                    {email.date && <span className="text-gray-400">• {email.date}</span>}
                   </div>
 
                   <div className="flex items-center gap-2 flex-wrap">
                     {/* Importance Category Badge */}
-                    <span className="text-[10px] uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full bg-accent/15 text-accent border border-accent/30">
+                    <span className="text-xs uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full bg-accent/15 text-accent border border-accent/30">
                       {formatCategory(email.importance_category)}
                     </span>
 
                     {/* Priority Badge */}
-                    <span className={`text-[10px] uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full ${getPriorityBadgeClass(email.priority)}`}>
+                    <span className={`text-xs uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full ${getPriorityBadgeClass(email.priority)}`}>
                       {email.priority || 'medium'}
                     </span>
                   </div>
@@ -371,11 +371,11 @@ export default function EmailInsights() {
 
                 {/* Email Subject & Summary */}
                 <div className="space-y-2">
-                  <h3 className="font-heading font-semibold text-base text-text-primary leading-snug">
+                  <h3 className="font-heading font-semibold text-lg text-text-primary leading-snug">
                     {email.subject}
                   </h3>
                   {email.summary && (
-                    <div className="text-text-secondary text-xs leading-relaxed bg-dark-bg/60 p-3 rounded-xl border border-gray-800/80">
+                    <div className="text-text-secondary text-sm leading-relaxed bg-navy p-3 rounded-xl border border-muted">
                       <span className="font-semibold text-accent/90">SEVA Insight: </span>
                       {email.summary}
                     </div>
@@ -383,20 +383,20 @@ export default function EmailInsights() {
                 </div>
 
                 {/* Footer Controls */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-gray-800/50">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-muted">
                   {/* User Feedback controls */}
-                  <div className="flex items-center gap-2 text-xs text-text-secondary">
-                    <span className="text-[11px]">Relevance feedback:</span>
+                  <div className="flex items-center gap-2 text-sm text-text-secondary">
+                    <span className="text-xs">Relevance feedback:</span>
                     <button
                       onClick={() => handleFeedback(email.id, 'important')}
                       title="Mark as Important"
                       className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
                         email.user_feedback === 'important'
                           ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
-                          : 'border-gray-800 hover:border-gray-700 hover:text-emerald-400'
+                          : 'border-muted hover:border-gray-600 hover:text-emerald-400'
                       }`}
                     >
-                      <ThumbsUp size={13} />
+                      <ThumbsUp size={14} />
                     </button>
                     <button
                       onClick={() => handleFeedback(email.id, 'not_important')}
@@ -404,13 +404,13 @@ export default function EmailInsights() {
                       className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
                         email.user_feedback === 'not_important'
                           ? 'bg-red-500/20 text-red-400 border-red-500/40'
-                          : 'border-gray-800 hover:border-gray-700 hover:text-red-400'
+                          : 'border-muted hover:border-gray-600 hover:text-red-400'
                       }`}
                     >
-                      <ThumbsDown size={13} />
+                      <ThumbsDown size={14} />
                     </button>
                     {email.user_feedback && (
-                      <span className="text-[10px] text-gray-500 capitalize">({email.user_feedback})</span>
+                      <span className="text-xs text-gray-400 capitalize">({email.user_feedback})</span>
                     )}
                   </div>
 
@@ -419,9 +419,9 @@ export default function EmailInsights() {
                     {/* View Details modal toggle */}
                     <button
                       onClick={() => setSelectedEmailDetail(email)}
-                      className="px-3 py-1.5 bg-dark-bg hover:bg-gray-800 text-text-secondary hover:text-text-primary border border-gray-800 rounded-xl text-xs font-medium flex items-center gap-1.5 transition-all cursor-pointer"
+                      className="px-3.5 py-1.5 bg-navy hover:bg-panelLight text-text-secondary hover:text-text-primary border border-muted rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all cursor-pointer"
                     >
-                      <Eye size={13} />
+                      <Eye size={15} />
                       <span>View Details</span>
                     </button>
 
@@ -432,17 +432,17 @@ export default function EmailInsights() {
                         <button
                           onClick={() => handleDismiss(email.id)}
                           disabled={actionLoading[email.id] === 'dismissing'}
-                          className="px-3 py-1.5 bg-dark-bg hover:bg-red-950/40 text-red-400 border border-gray-800 hover:border-red-500/40 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+                          className="px-3.5 py-1.5 bg-navy hover:bg-red-950/40 text-red-400 border border-muted hover:border-red-500/40 rounded-xl text-sm font-semibold flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
                         >
-                          <X size={13} />
+                          <X size={15} />
                           <span>Dismiss</span>
                         </button>
                         <button
                           onClick={() => handleAccept(email.id)}
                           disabled={actionLoading[email.id] === 'accepting'}
-                          className="px-3 py-1.5 bg-accent hover:bg-accent/90 text-dark-bg font-heading font-semibold rounded-xl text-xs flex items-center gap-1.5 transition-all shadow-md shadow-accent/20 cursor-pointer disabled:opacity-50"
+                          className="px-3.5 py-1.5 bg-accent hover:bg-accent/90 text-dark-bg font-heading font-semibold rounded-xl text-sm flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
                         >
-                          <Calendar size={13} />
+                          <Calendar size={15} />
                           <span>Accept Invite</span>
                         </button>
                       </>
@@ -450,25 +450,25 @@ export default function EmailInsights() {
                       /* Academic Warning, Defaulter Notice, or College Notice: Show Mark Reviewed & Dismiss Alert */
                       <>
                         {email.reviewed ? (
-                          <span className="text-xs text-emerald-400 flex items-center gap-1 bg-emerald-500/10 px-3 py-1 rounded-xl border border-emerald-500/30">
-                            <CheckCircle2 size={13} /> Reviewed
+                          <span className="text-sm text-emerald-400 flex items-center gap-1 bg-emerald-500/10 px-3 py-1 rounded-xl border border-emerald-500/30">
+                            <CheckCircle2 size={15} /> Reviewed
                           </span>
                         ) : (
                           <button
                             onClick={() => handleMarkReviewed(email.id)}
                             disabled={actionLoading[email.id] === 'reviewing'}
-                            className="px-3 py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/40 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+                            className="px-3.5 py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/40 rounded-xl text-sm font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
                           >
-                            <Check size={13} />
+                            <Check size={15} />
                             <span>Mark Reviewed</span>
                           </button>
                         )}
                         <button
                           onClick={() => handleDismissAlert(email.id)}
                           disabled={actionLoading[email.id] === 'dismissing_alert'}
-                          className="px-3 py-1.5 bg-dark-bg hover:bg-gray-800 text-text-secondary border border-gray-800 rounded-xl text-xs font-medium flex items-center gap-1.5 transition-all cursor-pointer"
+                          className="px-3.5 py-1.5 bg-navy hover:bg-panelLight text-text-secondary border border-muted rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all cursor-pointer"
                         >
-                          <X size={13} />
+                          <X size={15} />
                           <span>Dismiss Alert</span>
                         </button>
                       </>
@@ -479,9 +479,9 @@ export default function EmailInsights() {
                       onClick={() => handleDeleteEmail(email.id)}
                       disabled={actionLoading[email.id] === 'deleting'}
                       title="Remove from Email Insights"
-                      className="p-1.5 bg-dark-bg hover:bg-red-950/40 text-text-secondary hover:text-red-400 border border-gray-800 hover:border-red-500/40 rounded-xl text-xs transition-all cursor-pointer disabled:opacity-50"
+                      className="p-2 bg-navy hover:bg-red-950/40 text-text-secondary hover:text-red-400 border border-muted hover:border-red-500/40 rounded-xl text-sm transition-all cursor-pointer disabled:opacity-50"
                     >
-                      <Trash2 size={14} />
+                      <Trash2 size={15} />
                     </button>
                   </div>
                 </div>

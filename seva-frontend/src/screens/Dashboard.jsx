@@ -1,7 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
-  LayoutDashboard, 
   Mail, 
   CheckSquare, 
   Calendar, 
@@ -198,17 +197,17 @@ export default function Dashboard() {
     <div className="space-y-8 max-w-6xl mx-auto pb-10">
       
       {/* ── Greeting & Date Header ── */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-gray-800/80 pb-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-muted pb-6">
         <div>
           <h1 className="font-heading font-bold text-3xl sm:text-4xl text-text-primary tracking-tight">
             {greeting}
           </h1>
-          <p className="text-text-secondary text-sm mt-1">{todayFormatted}</p>
+          <p className="text-text-secondary text-base mt-1">{todayFormatted}</p>
         </div>
 
         {/* Sync Time Indicator */}
-        <div className="flex items-center gap-2 text-xs text-text-secondary bg-dark-bg/80 border border-gray-800 px-3.5 py-2 rounded-xl self-start sm:self-auto">
-          <Clock size={14} className="text-accent" />
+        <div className="flex items-center gap-2 text-sm text-text-secondary bg-navy border border-muted px-4 py-2 rounded-xl self-start sm:self-auto">
+          <Clock size={16} className="text-accent" />
           <span>
             {latestEmailDate ? `Gmail sync: ${latestEmailDate}` : `Dashboard updated: ${lastDashboardSync}`}
           </span>
@@ -220,7 +219,7 @@ export default function Dashboard() {
         <button
           onClick={handleGeneratePlan}
           disabled={generatingPlan}
-          className="px-5 py-2.5 bg-accent hover:bg-accent/90 text-dark-bg font-heading font-semibold text-sm rounded-xl transition-all flex items-center gap-2 shadow-lg shadow-accent/20 cursor-pointer disabled:opacity-50"
+          className="px-5 py-2.5 bg-accent hover:bg-accent/90 text-dark-bg font-heading font-semibold text-base rounded-xl transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
         >
           {generatingPlan ? (
             <>
@@ -237,7 +236,7 @@ export default function Dashboard() {
 
         <button
           onClick={() => setIsAddTaskOpen(true)}
-          className="px-4 py-2.5 bg-card-bg hover:bg-gray-800/80 text-text-primary border border-gray-700/80 font-medium text-sm rounded-xl transition-all flex items-center gap-2 cursor-pointer"
+          className="px-4 py-2.5 bg-card-bg hover:bg-panelLight text-text-primary border border-muted font-medium text-base rounded-xl transition-all flex items-center gap-2 cursor-pointer"
         >
           <Plus size={18} className="text-accent" />
           <span>Add Task</span>
@@ -245,7 +244,7 @@ export default function Dashboard() {
 
         <button
           onClick={() => navigate('/goals')}
-          className="px-4 py-2.5 bg-card-bg hover:bg-gray-800/80 text-text-primary border border-gray-700/80 font-medium text-sm rounded-xl transition-all flex items-center gap-2 cursor-pointer"
+          className="px-4 py-2.5 bg-card-bg hover:bg-panelLight text-text-primary border border-muted font-medium text-base rounded-xl transition-all flex items-center gap-2 cursor-pointer"
         >
           <CheckSquare size={18} className="text-accent" />
           <span>Goals</span>
@@ -253,7 +252,7 @@ export default function Dashboard() {
 
         <button
           onClick={() => navigate('/chat')}
-          className="px-4 py-2.5 bg-card-bg hover:bg-gray-800/80 text-text-primary border border-gray-700/80 font-medium text-sm rounded-xl transition-all flex items-center gap-2 cursor-pointer"
+          className="px-4 py-2.5 bg-card-bg hover:bg-panelLight text-text-primary border border-muted font-medium text-base rounded-xl transition-all flex items-center gap-2 cursor-pointer"
         >
           <MessageSquare size={18} className="text-accent" />
           <span>Open Chat</span>
@@ -261,14 +260,14 @@ export default function Dashboard() {
       </div>
 
       {/* ── Today's Window Control ── */}
-      <div className="bg-card-bg border border-gray-800/90 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="bg-card-bg border border-muted rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="p-2 bg-accent/10 rounded-xl text-accent">
-            <Clock size={18} />
+            <Clock size={20} />
           </div>
           <div>
-            <div className="text-xs uppercase font-semibold text-text-secondary tracking-wider">Today's Window</div>
-            <div className="text-sm font-semibold text-text-primary">
+            <div className="text-sm uppercase font-semibold text-text-secondary tracking-wider">Today's Window</div>
+            <div className="text-base font-semibold text-text-primary">
               {windowState?.done_for_day
                 ? 'Done for today'
                 : windowState?.window_set
@@ -281,28 +280,28 @@ export default function Dashboard() {
           <button
             onClick={() => handleQuickWindow({ window_end_time: '9:00 PM', done_for_day: false })}
             disabled={updatingWindow}
-            className="px-3 py-1.5 text-xs font-medium bg-dark-bg hover:bg-gray-800 text-text-primary border border-gray-700 rounded-lg cursor-pointer transition-all"
+            className="px-3.5 py-1.5 text-sm font-medium bg-navy hover:bg-panelLight text-text-primary border border-muted rounded-lg cursor-pointer transition-all"
           >
             Free till 9 PM
           </button>
           <button
             onClick={() => handleQuickWindow({ window_end_time: '11:00 PM', done_for_day: false })}
             disabled={updatingWindow}
-            className="px-3 py-1.5 text-xs font-medium bg-dark-bg hover:bg-gray-800 text-text-primary border border-gray-700 rounded-lg cursor-pointer transition-all"
+            className="px-3.5 py-1.5 text-sm font-medium bg-navy hover:bg-panelLight text-text-primary border border-muted rounded-lg cursor-pointer transition-all"
           >
             Free till 11 PM
           </button>
           <button
             onClick={() => handleQuickWindow({ available_minutes: 120, done_for_day: false })}
             disabled={updatingWindow}
-            className="px-3 py-1.5 text-xs font-medium bg-dark-bg hover:bg-gray-800 text-text-primary border border-gray-700 rounded-lg cursor-pointer transition-all"
+            className="px-3.5 py-1.5 text-sm font-medium bg-navy hover:bg-panelLight text-text-primary border border-muted rounded-lg cursor-pointer transition-all"
           >
             +2h
           </button>
           <button
             onClick={() => handleQuickWindow({ done_for_day: true })}
             disabled={updatingWindow}
-            className="px-3 py-1.5 text-xs font-medium bg-red-500/15 hover:bg-red-500/25 text-red-300 border border-red-500/30 rounded-lg cursor-pointer transition-all"
+            className="px-3.5 py-1.5 text-sm font-medium bg-red-500/15 hover:bg-red-500/25 text-red-300 border border-red-500/30 rounded-lg cursor-pointer transition-all"
           >
             Done for today
           </button>
@@ -376,82 +375,82 @@ export default function Dashboard() {
         {/* Card 1: Emails Today */}
         <div 
           onClick={() => navigate('/emails')}
-          className="bg-card-bg border border-gray-800/90 hover:border-accent/40 rounded-2xl p-5 space-y-3 transition-all cursor-pointer group"
+          className="bg-card-bg border border-muted hover:border-accent/40 rounded-2xl p-5 space-y-3 transition-all cursor-pointer group"
         >
           <div className="flex items-center justify-between">
-            <span className="text-xs uppercase font-semibold text-text-secondary tracking-wider">Emails Today</span>
-            <div className="p-2 bg-accent/10 rounded-xl text-accent group-hover:scale-110 transition-transform">
-              <Mail size={20} />
+            <span className="text-sm uppercase font-semibold text-text-secondary tracking-wider">Emails Today</span>
+            <div className="p-2 bg-accent/10 rounded-xl text-accent group-hover:scale-105 transition-transform">
+              <Mail size={22} />
             </div>
           </div>
           <div className="flex items-baseline gap-2">
             <span className="font-heading font-bold text-4xl text-text-primary">{emailCount}</span>
-            <span className="text-xs text-text-secondary">fetched</span>
+            <span className="text-sm text-text-secondary">fetched</span>
           </div>
         </div>
 
         {/* Card 2: Tasks Pending */}
         <div 
           onClick={() => navigate('/dayplan')}
-          className="bg-card-bg border border-gray-800/90 hover:border-accent/40 rounded-2xl p-5 space-y-3 transition-all cursor-pointer group"
+          className="bg-card-bg border border-muted hover:border-accent/40 rounded-2xl p-5 space-y-3 transition-all cursor-pointer group"
         >
           <div className="flex items-center justify-between">
-            <span className="text-xs uppercase font-semibold text-text-secondary tracking-wider">Tasks Pending</span>
-            <div className="p-2 bg-amber-500/10 rounded-xl text-amber-400 group-hover:scale-110 transition-transform">
-              <CheckSquare size={20} />
+            <span className="text-sm uppercase font-semibold text-text-secondary tracking-wider">Tasks Pending</span>
+            <div className="p-2 bg-amber-500/10 rounded-xl text-amber-400 group-hover:scale-105 transition-transform">
+              <CheckSquare size={22} />
             </div>
           </div>
           <div className="flex items-baseline gap-2">
             <span className="font-heading font-bold text-4xl text-text-primary">{pendingTaskCount}</span>
-            <span className="text-xs text-text-secondary">remaining</span>
+            <span className="text-sm text-text-secondary">remaining</span>
           </div>
         </div>
 
         {/* Card 3: Meetings & Commitments */}
         <div 
           onClick={() => navigate('/dayplan')}
-          className="bg-card-bg border border-gray-800/90 hover:border-accent/40 rounded-2xl p-5 space-y-3 transition-all cursor-pointer group"
+          className="bg-card-bg border border-muted hover:border-accent/40 rounded-2xl p-5 space-y-3 transition-all cursor-pointer group"
         >
           <div className="flex items-center justify-between">
-            <span className="text-xs uppercase font-semibold text-text-secondary tracking-wider">Meetings / Commitments</span>
-            <div className="p-2 bg-purple-500/10 rounded-xl text-purple-400 group-hover:scale-110 transition-transform">
-              <Calendar size={20} />
+            <span className="text-sm uppercase font-semibold text-text-secondary tracking-wider">Meetings / Commitments</span>
+            <div className="p-2 bg-purple-500/10 rounded-xl text-purple-400 group-hover:scale-105 transition-transform">
+              <Calendar size={22} />
             </div>
           </div>
           <div className="flex items-baseline gap-2">
             <span className="font-heading font-bold text-4xl text-text-primary">{meetingsCount}</span>
-            <span className="text-xs text-text-secondary">scheduled</span>
+            <span className="text-sm text-text-secondary">scheduled</span>
           </div>
         </div>
 
       </div>
 
       {/* ── Top 3 Priorities Section ── */}
-      <div className="bg-card-bg border border-gray-800/90 rounded-2xl p-6 space-y-5">
+      <div className="bg-card-bg border border-muted rounded-2xl p-6 space-y-5">
         <div className="flex items-center justify-between">
           <div className="space-y-1">
-            <h3 className="font-heading font-semibold text-xl text-text-primary flex items-center gap-2">
-              <Sparkles size={20} className="text-accent" />
+            <h3 className="font-heading font-semibold text-2xl text-text-primary flex items-center gap-2">
+              <Sparkles size={22} className="text-accent" />
               Top Priorities Today
             </h3>
-            <p className="text-text-secondary text-xs">Derived from your AI generated Day Plan schedule</p>
+            <p className="text-text-secondary text-sm">Derived from your AI generated Day Plan schedule</p>
           </div>
 
           <button
             onClick={() => navigate('/dayplan')}
-            className="text-xs text-accent hover:underline flex items-center gap-1 cursor-pointer font-medium"
+            className="text-sm text-accent hover:underline flex items-center gap-1.5 cursor-pointer font-medium"
           >
             <span>View Full Day Plan</span>
-            <ArrowRight size={14} />
+            <ArrowRight size={16} />
           </button>
         </div>
 
         {/* Priorities List or Empty State */}
         {!hasPlan || topPriorities.length === 0 ? (
-          <div className="bg-dark-bg/60 border border-gray-800 rounded-xl p-8 text-center space-y-3">
+          <div className="bg-navy border border-muted rounded-xl p-8 text-center space-y-3">
             <Calendar className="mx-auto text-text-secondary opacity-50" size={36} />
-            <p className="text-text-primary font-medium text-sm">No active day plan generated yet</p>
-            <p className="text-text-secondary text-xs max-w-md mx-auto">
+            <p className="text-text-primary font-medium text-base">No active day plan generated yet</p>
+            <p className="text-text-secondary text-sm max-w-md mx-auto">
               Click "Generate Day Plan" above to create an AI-optimized schedule combining your emails, commitments, and task deadlines.
             </p>
           </div>
@@ -460,24 +459,24 @@ export default function Dashboard() {
             {topPriorities.map((item, index) => (
               <div 
                 key={index}
-                className="bg-dark-bg/80 border border-gray-800/80 hover:border-gray-700 rounded-xl p-4 flex items-center justify-between gap-4 transition-all"
+                className="bg-navy border border-muted hover:border-gray-600 rounded-xl p-4 flex items-center justify-between gap-4 transition-all"
               >
                 <div className="flex items-center gap-3 min-w-0">
-                  <span className="text-xs font-mono text-accent bg-accent/10 px-2.5 py-1 rounded-md border border-accent/20 shrink-0">
+                  <span className="text-sm font-mono text-accent bg-accent/10 px-2.5 py-1 rounded-md border border-accent/20 shrink-0">
                     {item.time || 'Anytime'}
                   </span>
-                  <span className="text-sm font-medium text-text-primary truncate">
+                  <span className="text-base font-medium text-text-primary truncate">
                     {item.task}
                   </span>
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
                   {item.source && (
-                    <span className="text-[10px] uppercase font-semibold text-text-secondary bg-gray-800 px-2 py-0.5 rounded">
+                    <span className="text-xs uppercase font-semibold text-text-secondary bg-panelLight px-2 py-0.5 rounded">
                       {item.source}
                     </span>
                   )}
-                  <span className={`text-[11px] font-semibold uppercase px-2.5 py-0.5 rounded-full ${getPriorityBadgeClass(item.priority)}`}>
+                  <span className={`text-xs font-semibold uppercase px-2.5 py-0.5 rounded-full ${getPriorityBadgeClass(item.priority)}`}>
                     {item.priority || 'medium'}
                   </span>
                 </div>

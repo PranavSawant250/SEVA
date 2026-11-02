@@ -13,7 +13,6 @@ import {
   BookOpen
 } from 'lucide-react';
 import client from '../api/client';
-import Galaxy from '../components/Galaxy';
 
 const DAYS_OF_WEEK = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
@@ -119,39 +118,16 @@ export default function Login() {
   };
 
   return (
-    <div className="relative min-h-screen bg-main-gradient flex items-center justify-center p-4 sm:p-6 font-sans overflow-hidden">
-      {/* Full-screen Galaxy background */}
-      <div
-        className="chat-galaxy-background fixed inset-0 w-full h-full pointer-events-none z-0"
-        style={{
-          width: '100%',
-          height: '100%',
-          position: 'fixed',
-          inset: 0,
-          overflow: 'hidden',
-          pointerEvents: 'none',
-        }}
-        aria-hidden="true"
-      >
-        <Galaxy
-          density={1}
-          glowIntensity={0.3}
-          flareIntensity={1}
-          starSpeed={0.5}
-          mouseRepulsion
-          clickWarp
-        />
-      </div>
-
-      <div className="relative z-10 w-full max-w-2xl bg-card-bg border border-gray-800/80 rounded-2xl shadow-2xl p-6 sm:p-10 backdrop-blur-md">
+    <div className="min-h-screen bg-deep flex items-center justify-center p-4 sm:p-6 font-sans">
+      <div className="w-full max-w-2xl bg-navy border border-muted rounded-2xl shadow-xl p-6 sm:p-10">
         
         {/* Header Branding */}
         <div className="text-center space-y-2 mb-8">
           <div className="flex items-center justify-center gap-3">
-            <LogIn size={36} className="text-accent" style={{ filter: 'drop-shadow(0 0 10px rgba(0,217,255,0.7))' }} />
-            <h1 className="font-heading font-bold text-4xl text-accent text-glow tracking-wider">SEVA</h1>
+            <LogIn size={36} className="text-accent" />
+            <h1 className="font-heading font-bold text-4xl text-accent tracking-wider">SEVA</h1>
           </div>
-          <p className="text-sm font-medium text-text-secondary uppercase tracking-widest">Personal Life Orchestrator</p>
+          <p className="text-sm font-semibold text-text-secondary uppercase tracking-widest">Personal Life Orchestrator</p>
         </div>
 
         {/* Global Error Banner */}
@@ -299,11 +275,11 @@ export default function Login() {
                 >
                   {/* Day Dropdown */}
                   <div className="w-full sm:w-36">
-                    <label className="block text-[10px] uppercase tracking-wider text-text-secondary mb-1 font-semibold">Day</label>
+                    <label className="block text-xs uppercase tracking-wider text-text-secondary mb-1 font-semibold">Day</label>
                     <select
                       value={row.day_of_week}
                       onChange={(e) => handleRowChange(idx, 'day_of_week', e.target.value)}
-                      className="w-full bg-card-bg border border-gray-700/80 rounded-lg px-2.5 py-1.5 text-xs text-text-primary focus:outline-none focus:border-accent"
+                      className="w-full bg-card-bg border border-muted rounded-lg px-2.5 py-2 text-sm text-text-primary focus:outline-none focus:border-accent"
                     >
                       {DAYS_OF_WEEK.map((day) => (
                         <option key={day} value={day} className="bg-dark-bg text-text-primary">
@@ -315,45 +291,45 @@ export default function Login() {
 
                   {/* Subject Input */}
                   <div className="flex-1">
-                    <label className="block text-[10px] uppercase tracking-wider text-text-secondary mb-1 font-semibold">Subject / Activity</label>
+                    <label className="block text-xs uppercase tracking-wider text-text-secondary mb-1 font-semibold">Subject / Activity</label>
                     <div className="relative">
-                      <BookOpen size={14} className="absolute left-2.5 top-2 text-text-secondary" />
+                      <BookOpen size={16} className="absolute left-2.5 top-2.5 text-text-secondary" />
                       <input
                         type="text"
                         placeholder="e.g. Data Structures"
                         value={row.subject}
                         onChange={(e) => handleRowChange(idx, 'subject', e.target.value)}
-                        className="w-full bg-card-bg border border-gray-700/80 rounded-lg pl-8 pr-2.5 py-1.5 text-xs text-text-primary focus:outline-none focus:border-accent"
+                        className="w-full bg-card-bg border border-muted rounded-lg pl-9 pr-2.5 py-2 text-sm text-text-primary focus:outline-none focus:border-accent"
                       />
                     </div>
                   </div>
 
                   {/* Start Time */}
                   <div className="w-full sm:w-28">
-                    <label className="block text-[10px] uppercase tracking-wider text-text-secondary mb-1 font-semibold">Start Time</label>
+                    <label className="block text-xs uppercase tracking-wider text-text-secondary mb-1 font-semibold">Start Time</label>
                     <div className="relative">
-                      <Clock size={14} className="absolute left-2.5 top-2 text-text-secondary" />
+                      <Clock size={16} className="absolute left-2.5 top-2.5 text-text-secondary" />
                       <input
                         type="text"
                         placeholder="9:00 AM"
                         value={row.start_time}
                         onChange={(e) => handleRowChange(idx, 'start_time', e.target.value)}
-                        className="w-full bg-card-bg border border-gray-700/80 rounded-lg pl-8 pr-2 py-1.5 text-xs text-text-primary focus:outline-none focus:border-accent"
+                        className="w-full bg-card-bg border border-muted rounded-lg pl-9 pr-2 py-2 text-sm text-text-primary focus:outline-none focus:border-accent"
                       />
                     </div>
                   </div>
 
                   {/* End Time */}
                   <div className="w-full sm:w-28">
-                    <label className="block text-[10px] uppercase tracking-wider text-text-secondary mb-1 font-semibold">End Time</label>
+                    <label className="block text-xs uppercase tracking-wider text-text-secondary mb-1 font-semibold">End Time</label>
                     <div className="relative">
-                      <Clock size={14} className="absolute left-2.5 top-2 text-text-secondary" />
+                      <Clock size={16} className="absolute left-2.5 top-2.5 text-text-secondary" />
                       <input
                         type="text"
                         placeholder="11:00 AM"
                         value={row.end_time}
                         onChange={(e) => handleRowChange(idx, 'end_time', e.target.value)}
-                        className="w-full bg-card-bg border border-gray-700/80 rounded-lg pl-8 pr-2 py-1.5 text-xs text-text-primary focus:outline-none focus:border-accent"
+                        className="w-full bg-card-bg border border-muted rounded-lg pl-9 pr-2 py-2 text-sm text-text-primary focus:outline-none focus:border-accent"
                       />
                     </div>
                   </div>
@@ -363,7 +339,7 @@ export default function Login() {
                     <button
                       type="button"
                       onClick={() => handleRemoveRow(idx)}
-                      className="p-1.5 text-red-400 hover:text-red-300 hover:bg-red-950/40 rounded-lg transition-all"
+                      className="p-2 text-red-400 hover:text-red-300 hover:bg-red-950/40 rounded-lg transition-all cursor-pointer"
                       title="Remove row"
                     >
                       <Trash2 size={16} />
@@ -374,11 +350,11 @@ export default function Login() {
             </div>
 
             {/* Controls */}
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 border-t border-gray-800 pt-4">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 border-t border-muted pt-4">
               <button
                 type="button"
                 onClick={handleAddRow}
-                className="w-full sm:w-auto px-4 py-2 bg-dark-bg hover:bg-gray-800 text-text-primary border border-gray-700 rounded-xl text-xs font-medium flex items-center justify-center gap-2 transition-all cursor-pointer"
+                className="w-full sm:w-auto px-4 py-2.5 bg-dark-bg hover:bg-muted text-text-primary border border-muted rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-all cursor-pointer"
               >
                 <Plus size={16} className="text-accent" />
                 <span>Add Class / Slot</span>
@@ -387,7 +363,7 @@ export default function Login() {
               <button
                 type="submit"
                 disabled={submitting}
-                className="w-full sm:w-auto px-6 py-2.5 bg-accent hover:bg-accent/90 text-dark-bg font-heading font-semibold text-sm rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-accent/20 disabled:opacity-50"
+                className="w-full sm:w-auto px-6 py-2.5 bg-accent hover:bg-accent/90 text-dark-bg font-heading font-semibold text-base rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-accent/20 disabled:opacity-50"
               >
                 {submitting ? (
                   <>

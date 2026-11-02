@@ -7,30 +7,25 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        // SEVA Design System — defined ONCE here, used by name everywhere
-        navy:   '#0a1128',   // Base dark background
-        deep:   '#050b1a',   // Darkest layer (body background)
-        accent: '#00d9ff',   // Electric cyan — SEVA signature color
-        panel:  '#111827',   // Slightly lighter for cards/panels
-        muted:  '#1e2d4a',   // Muted navy for borders and subtle fills
+        // SEVA Design System — Consistent Navy-Blue Dark Theme
+        navy:   '#0a1128',   // Base dark navy (sidebar, headers)
+        deep:   '#050b1a',   // Deepest navy background (body background)
+        accent: '#00d9ff',   // Electric cyan — crisp SEVA accent
+        panel:  '#0f172a',   // Clean navy-slate for cards and panels
+        panelLight: '#16223b', // Elevated card / hover state
+        muted:  '#1e2d4a',   // Subtle borders and dividers
         text: {
-          primary:   '#f0f6ff',  // Near-white for headings
-          secondary: '#8899bb',  // Muted blue-grey for body
+          primary:   '#f8fafc',  // High-contrast clean white for headings & primary text
+          secondary: '#94a3b8',  // Light slate-grey for body and metadata
+          muted:     '#64748b',  // Subtle hint text
         }
       },
       fontFamily: {
         sans:    ['Inter', 'sans-serif'],
         heading: ['"Space Grotesk"', 'sans-serif'],
       },
-      boxShadow: {
-        'accent-glow':  '0 0 20px rgba(0, 217, 255, 0.3)',
-        'accent-glow-sm': '0 0 10px rgba(0, 217, 255, 0.2)',
-      },
       backgroundImage: {
         'main-gradient': 'linear-gradient(135deg, #050b1a 0%, #0a1128 50%, #0d1a35 100%)',
-      },
-      animation: {
-        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
       }
     },
   },

@@ -10,6 +10,8 @@ const aiService = require('./services/aiService');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const HOST = process.env.HOST || '127.0.0.1';
+const AUTH_MODE = process.env.AUTH_MODE || 'local';
 
 // Middleware
 app.use(cors());
@@ -57,9 +59,9 @@ cron.schedule('*/30 * * * *', async () => {
 });
 
 // Start Express Server
-const server = app.listen(PORT, () => {
-  console.log(`🚀 SEVA Backend running on port ${PORT}`);
-  console.log(`🔗 OAuth Login Link: http://localhost:${PORT}/api/auth/gmail`);
+const server = app.listen(PORT, HOST, () => {
+  console.log(`🚀 SEVA Backend running at http://${HOST}:${PORT} [AUTH_MODE: ${AUTH_MODE}]`);
+  console.log(`🔗 OAuth Login Link: http://${HOST}:${PORT}/api/auth/gmail`);
 });
 
 // Graceful Shutdown Handler

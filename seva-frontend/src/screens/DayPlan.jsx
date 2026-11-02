@@ -35,7 +35,6 @@ export default function DayPlan() {
   const [hasPlan, setHasPlan] = useState(false);
   const [todayDate, setTodayDate] = useState('');
   const [deferredItems, setDeferredItems] = useState([]);
-  const [shrunkItems, setShrunkItems] = useState([]);
   const [floorSessions, setFloorSessions] = useState([]);
   const [warnings, setWarnings] = useState([]);
   const [planNote, setPlanNote] = useState('');
@@ -346,14 +345,14 @@ export default function DayPlan() {
     <div className="space-y-6 max-w-5xl pb-10">
       
       {/* ── Page Header & Controls ── */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-gray-800 pb-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-muted pb-6">
         <div className="flex items-center gap-3">
           <div className="p-2.5 bg-accent/10 border border-accent/30 rounded-xl text-accent">
-            <Calendar size={26} style={{ filter: 'drop-shadow(0 0 6px rgba(0,217,255,0.5))' }} />
+            <Calendar size={26} />
           </div>
           <div>
             <h1 className="font-heading font-bold text-3xl text-text-primary">Day Plan Timeline</h1>
-            <p className="text-text-secondary text-xs mt-0.5">Deterministic goal-aware schedule for today</p>
+            <p className="text-text-secondary text-sm mt-0.5">Deterministic goal-aware schedule for today</p>
           </div>
         </div>
 
@@ -361,18 +360,18 @@ export default function DayPlan() {
         <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => setIsAddTaskOpen(true)}
-            className="px-3.5 py-2 bg-card-bg hover:bg-gray-800 text-text-primary border border-gray-700/80 rounded-xl text-xs font-medium flex items-center gap-1.5 transition-all cursor-pointer"
+            className="px-4 py-2 bg-card-bg hover:bg-panelLight text-text-primary border border-muted rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all cursor-pointer"
           >
-            <Plus size={16} className="text-accent" />
+            <Plus size={18} className="text-accent" />
             <span>Add Task</span>
           </button>
 
           <button
             onClick={() => handleGeneratePlan()}
             disabled={generatingPlan}
-            className="px-4 py-2 bg-accent hover:bg-accent/90 text-dark-bg font-heading font-semibold text-xs rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-lg shadow-accent/20 disabled:opacity-50"
+            className="px-4 py-2 bg-accent hover:bg-accent/90 text-dark-bg font-heading font-semibold text-sm rounded-xl transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
           >
-            <Sparkles size={16} className={generatingPlan ? 'animate-spin' : ''} />
+            <Sparkles size={18} className={generatingPlan ? 'animate-spin' : ''} />
             <span>{generatingPlan ? 'Generating Plan...' : hasPlan ? 'Regenerate Plan' : 'Generate Plan'}</span>
           </button>
         </div>
@@ -382,11 +381,11 @@ export default function DayPlan() {
       <div className={`rounded-2xl p-5 border space-y-3 ${
         needsWindow
           ? 'bg-amber-950/30 border-amber-500/50'
-          : 'bg-card-bg border-gray-800'
+          : 'bg-card-bg border-muted'
       }`}>
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div className="flex items-center gap-2 text-xs font-semibold text-text-primary">
-            <Sliders size={16} className={needsWindow ? 'text-amber-400' : 'text-accent'} />
+          <div className="flex items-center gap-2 text-sm font-semibold text-text-primary">
+            <Sliders size={18} className={needsWindow ? 'text-amber-400' : 'text-accent'} />
             <span>
               {needsWindow
                 ? 'Daily Window Not Set'
@@ -396,14 +395,14 @@ export default function DayPlan() {
             </span>
           </div>
           {windowState?.window_set && !windowState?.done_for_day && (
-            <span className="text-[11px] font-mono text-accent">
+            <span className="text-xs font-mono text-accent">
               {windowState.remaining_minutes} min remaining ({windowState.source})
             </span>
           )}
         </div>
 
         {(needsWindow || windowPromptMsg) && (
-          <p className="text-xs text-amber-300">
+          <p className="text-sm text-amber-300">
             {windowPromptMsg || 'Tell SEVA when your free window ends today (e.g. "9:00 PM" or "4 hours") so your schedule can be built without assuming a bedtime.'}
             {windowHint ? ` ${windowHint}` : ''}
           </p>
@@ -415,12 +414,12 @@ export default function DayPlan() {
             placeholder='e.g. "9:00 PM" or "4 hours" or "90 minutes"'
             value={windowInput}
             onChange={(e) => setWindowInput(e.target.value)}
-            className="flex-1 min-w-[200px] bg-dark-bg border border-gray-700/80 rounded-xl px-3.5 py-2 text-xs text-text-primary focus:outline-none focus:border-accent"
+            className="flex-1 min-w-[200px] bg-navy border border-muted rounded-xl px-3.5 py-2 text-sm text-text-primary focus:outline-none focus:border-accent"
           />
           <button
             type="submit"
             disabled={savingWindow || !windowInput.trim()}
-            className="px-3.5 py-2 bg-accent hover:bg-accent/90 text-dark-bg font-heading font-semibold text-xs rounded-xl transition-all cursor-pointer disabled:opacity-50"
+            className="px-4 py-2 bg-accent hover:bg-accent/90 text-dark-bg font-heading font-semibold text-sm rounded-xl transition-all cursor-pointer disabled:opacity-50"
           >
             {savingWindow ? 'Saving...' : 'Set Window & Plan'}
           </button>
@@ -428,7 +427,7 @@ export default function DayPlan() {
             type="button"
             disabled={savingWindow}
             onClick={() => handleSetWindow({ available_minutes: 120, done_for_day: false })}
-            className="px-2.5 py-2 bg-dark-bg hover:bg-gray-800 text-text-secondary hover:text-text-primary border border-gray-700 rounded-xl text-xs cursor-pointer"
+            className="px-3 py-2 bg-navy hover:bg-panelLight text-text-secondary hover:text-text-primary border border-muted rounded-xl text-sm cursor-pointer"
           >
             +2h
           </button>
@@ -436,7 +435,7 @@ export default function DayPlan() {
             type="button"
             disabled={savingWindow}
             onClick={() => handleSetWindow({ available_minutes: 240, done_for_day: false })}
-            className="px-2.5 py-2 bg-dark-bg hover:bg-gray-800 text-text-secondary hover:text-text-primary border border-gray-700 rounded-xl text-xs cursor-pointer"
+            className="px-3 py-2 bg-navy hover:bg-panelLight text-text-secondary hover:text-text-primary border border-muted rounded-xl text-sm cursor-pointer"
           >
             +4h
           </button>
@@ -444,7 +443,7 @@ export default function DayPlan() {
             type="button"
             disabled={savingWindow}
             onClick={() => handleSetWindow({ window_end_time: '9:00 PM', done_for_day: false })}
-            className="px-2.5 py-2 bg-dark-bg hover:bg-gray-800 text-text-secondary hover:text-text-primary border border-gray-700 rounded-xl text-xs cursor-pointer"
+            className="px-3 py-2 bg-navy hover:bg-panelLight text-text-secondary hover:text-text-primary border border-muted rounded-xl text-sm cursor-pointer"
           >
             Till 9 PM
           </button>
@@ -452,7 +451,7 @@ export default function DayPlan() {
             type="button"
             disabled={savingWindow}
             onClick={() => handleSetWindow({ done_for_day: true })}
-            className="px-2.5 py-2 bg-rose-950/40 hover:bg-rose-900/40 text-rose-300 border border-rose-500/30 rounded-xl text-xs cursor-pointer"
+            className="px-3 py-2 bg-rose-950/40 hover:bg-rose-900/40 text-rose-300 border border-rose-500/30 rounded-xl text-sm cursor-pointer"
           >
             Done for today
           </button>
@@ -461,14 +460,14 @@ export default function DayPlan() {
 
       {/* ── ERROR ALERT ── */}
       {errorMsg && (
-        <div className="p-4 bg-red-950/40 border border-red-500/50 rounded-xl flex items-center justify-between gap-3 text-red-400 text-xs">
+        <div className="p-4 bg-red-950/40 border border-red-500/50 rounded-xl flex items-center justify-between gap-3 text-red-400 text-sm">
           <div className="flex items-center gap-2">
-            <AlertCircle size={18} className="shrink-0" />
+            <AlertCircle size={20} className="shrink-0" />
             <span>{errorMsg}</span>
           </div>
           <button
             onClick={fetchPlanAndTasks}
-            className="px-3 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-lg border border-red-500/40 text-[11px]"
+            className="px-3 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-lg border border-red-500/40 text-xs"
           >
             Retry
           </button>
@@ -477,12 +476,12 @@ export default function DayPlan() {
 
       {/* ── Plan Note & Warnings ── */}
       {planNote && (
-        <div className="p-4 bg-accent/10 border border-accent/30 rounded-2xl flex items-start gap-3 text-xs text-text-primary">
-          <Info size={16} className="text-accent shrink-0 mt-0.5" />
+        <div className="p-4 bg-accent/10 border border-accent/30 rounded-2xl flex items-start gap-3 text-sm text-text-primary">
+          <Info size={18} className="text-accent shrink-0 mt-0.5" />
           <div className="space-y-1">
             <p className="font-medium leading-relaxed">{planNote}</p>
             {floorSessions.length > 0 && (
-              <p className="text-cyan-300 text-[11px]">
+              <p className="text-cyan-300 text-xs">
                 Neglect Floor: {floorSessions.map(f => `${f.item} (${f.duration} min)`).join(', ')}
               </p>
             )}
@@ -491,10 +490,10 @@ export default function DayPlan() {
       )}
 
       {warnings.length > 0 && (
-        <div className="p-4 bg-amber-950/30 border border-amber-500/40 rounded-2xl space-y-1.5 text-xs text-amber-300">
+        <div className="p-4 bg-amber-950/30 border border-amber-500/40 rounded-2xl space-y-1.5 text-sm text-amber-300">
           {warnings.map((w, i) => (
             <div key={i} className="flex items-start gap-2">
-              <AlertTriangle size={14} className="shrink-0 mt-0.5 text-amber-400" />
+              <AlertTriangle size={16} className="shrink-0 mt-0.5 text-amber-400" />
               <span>{w}</span>
             </div>
           ))}
@@ -503,18 +502,18 @@ export default function DayPlan() {
 
       {/* ── Progress Bar & Completion Header (if plan exists) ── */}
       {hasPlan && planItems.length > 0 && (
-        <div className="bg-card-bg border border-gray-800 rounded-2xl p-5 space-y-3">
-          <div className="flex items-center justify-between text-xs">
+        <div className="bg-card-bg border border-muted rounded-2xl p-5 space-y-3">
+          <div className="flex items-center justify-between text-sm">
             <div className="flex items-center gap-2 font-semibold text-text-primary">
-              <CheckSquare size={16} className="text-accent" />
+              <CheckSquare size={18} className="text-accent" />
               <span>Daily Progress ({completedCount} of {totalItems} completed)</span>
             </div>
-            <span className="font-mono text-accent font-bold">{progressPercent}%</span>
+            <span className="font-mono text-accent font-bold text-base">{progressPercent}%</span>
           </div>
           
-          <div className="w-full bg-dark-bg rounded-full h-2.5 overflow-hidden border border-gray-800">
+          <div className="w-full bg-navy rounded-full h-2.5 overflow-hidden border border-muted">
             <div 
-              className="bg-accent h-full transition-all duration-500 ease-out shadow-[0_0_10px_rgba(0,217,255,0.7)]"
+              className="bg-accent h-full transition-all duration-500 ease-out"
               style={{ width: `${progressPercent}%` }}
             ></div>
           </div>
@@ -522,17 +521,17 @@ export default function DayPlan() {
       )}
 
       {/* ── Replan Surprise Event Form ── */}
-      <form onSubmit={handleReplan} className="bg-card-bg/60 border border-gray-800/80 rounded-2xl p-5 space-y-3">
-        <div className="flex items-center gap-2 text-xs font-semibold text-accent">
-          <Zap size={16} />
+      <form onSubmit={handleReplan} className="bg-card-bg border border-muted rounded-2xl p-5 space-y-3">
+        <div className="flex items-center gap-2 text-sm font-semibold text-accent">
+          <Zap size={18} />
           <span>Surprise Event Replan</span>
         </div>
-        <p className="text-text-secondary text-xs">
+        <p className="text-text-secondary text-sm">
           Got an unexpected meeting, viva, or urgent event? Enter it below to insert it as a fixed block and recalculate the rest of your window.
         </p>
 
         {replanMsg && (
-          <div className="text-xs text-emerald-400 font-medium bg-emerald-500/10 p-2.5 rounded-lg border border-emerald-500/30">
+          <div className="text-sm text-emerald-400 font-medium bg-emerald-500/10 p-2.5 rounded-lg border border-emerald-500/30">
             {replanMsg}
           </div>
         )}
@@ -543,19 +542,18 @@ export default function DayPlan() {
             placeholder="e.g., Surprise viva with Professor Rathod at 3:30 PM"
             value={replanText}
             onChange={(e) => setReplanText(e.target.value)}
-            className="flex-1 bg-dark-bg border border-gray-700/80 rounded-xl px-3.5 py-2 text-xs text-text-primary focus:outline-none focus:border-accent"
+            className="flex-1 bg-navy border border-muted rounded-xl px-3.5 py-2 text-sm text-text-primary focus:outline-none focus:border-accent"
           />
           <button
             type="submit"
             disabled={replanning || !replanText.trim()}
-            className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent border border-accent/40 font-heading font-semibold text-xs rounded-xl transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0"
+            className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent border border-accent/40 font-heading font-semibold text-sm rounded-xl transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0"
           >
-            <Zap size={14} className={replanning ? 'animate-spin' : ''} />
+            <Zap size={16} className={replanning ? 'animate-spin' : ''} />
             <span>{replanning ? 'Replanning...' : 'Replan Day'}</span>
           </button>
         </div>
       </form>
-
       {/* ── EMPTY STATE OR TIMELINE ── */}
       {!hasPlan || planItems.length === 0 ? (
         <div className="bg-card-bg border border-gray-800 rounded-2xl p-12 text-center space-y-4">
@@ -587,14 +585,14 @@ export default function DayPlan() {
                 key={item.task_id ? `task-${item.task_id}-${index}` : index}
                 className={`bg-card-bg border rounded-2xl p-4 ml-8 relative transition-all ${
                   isCompleted 
-                    ? 'border-gray-800/60 bg-dark-bg/60 opacity-60' 
-                    : 'border-gray-800 hover:border-accent/40'
+                    ? 'border-muted bg-navy/60 opacity-60' 
+                    : 'border-muted hover:border-gray-600'
                 }`}
               >
                 <div className={`absolute -left-[25px] top-5 w-3.5 h-3.5 rounded-full border-2 ${
                   isCompleted 
                     ? 'bg-emerald-500 border-emerald-400' 
-                    : 'bg-accent border-dark-bg shadow-[0_0_8px_rgba(0,217,255,0.7)]'
+                    : 'bg-accent border-navy'
                 }`} />
 
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -609,31 +607,31 @@ export default function DayPlan() {
                       }`}
                     >
                       {isCompleted ? (
-                        <CheckCircle2 size={20} className="text-emerald-400 fill-emerald-500/20" />
+                        <CheckCircle2 size={22} className="text-emerald-400 fill-emerald-500/20" />
                       ) : (
-                        <Circle size={20} />
+                        <Circle size={22} />
                       )}
                     </button>
 
                     <div className="space-y-1 min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-mono text-xs font-semibold text-accent bg-accent/10 px-2 py-0.5 rounded border border-accent/20 shrink-0">
+                        <span className="font-mono text-sm font-semibold text-accent bg-accent/10 px-2 py-0.5 rounded border border-accent/20 shrink-0">
                           {item.time || 'Anytime'}
                         </span>
                         {item.duration && (
-                          <span className="text-[11px] text-text-secondary flex items-center gap-1 shrink-0">
-                            <Clock size={12} />
+                          <span className="text-xs text-text-secondary flex items-center gap-1 shrink-0">
+                            <Clock size={14} />
                             {item.duration} mins
                           </span>
                         )}
                         {item.floor && (
-                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
+                          <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
                             Neglect Floor (30m)
                           </span>
                         )}
                       </div>
 
-                      <h4 className={`font-heading font-semibold text-sm leading-snug text-text-primary ${
+                      <h4 className={`font-heading font-semibold text-base leading-snug text-text-primary ${
                         isCompleted ? 'line-through text-text-secondary' : ''
                       }`}>
                         {item.task}
@@ -642,10 +640,10 @@ export default function DayPlan() {
                   </div>
 
                   <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
-                    <span className={`text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full ${getSourceBadgeClass(item.source)}`}>
+                    <span className={`text-xs uppercase font-bold tracking-wider px-2 py-0.5 rounded-full ${getSourceBadgeClass(item.source)}`}>
                       {item.source || 'manual'}
                     </span>
-                    <span className={`text-[10px] uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full ${getPriorityBadgeClass(item.priority)}`}>
+                    <span className={`text-xs uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full ${getPriorityBadgeClass(item.priority)}`}>
                       {item.priority || 'medium'}
                     </span>
                   </div>

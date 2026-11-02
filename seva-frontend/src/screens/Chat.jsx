@@ -10,7 +10,6 @@ import {
   Clock 
 } from 'lucide-react';
 import client from '../api/client';
-import MagicRings from '../components/MagicRings';
 import './Chat.css';
 
 export default function Chat() {
@@ -126,31 +125,9 @@ export default function Chat() {
   };
 
   return (
-    <div className="seva-chat-screen flex flex-col h-[calc(100vh-5rem)] max-w-5xl mx-auto">
-      {/* ── Animated MagicRings Background Layer ── */}
-      <div
-        className="seva-chat-bg"
-        style={{
-          width: '100%',
-          height: '100%',
-          position: 'absolute',
-        }}
-      >
-        <MagicRings
-          color="#A855F7"
-          colorTwo="#6366F1"
-          motion="pulse"
-          ringCount={6}
-          speed={1}
-          lineThickness={2}
-          glow={1}
-          hoverScale={1.2}
-          clickBurst={true}
-        />
-      </div>
-
+    <div className="seva-chat-screen flex flex-col h-[calc(100vh-5rem)] max-w-5xl mx-auto bg-navy border border-muted rounded-2xl shadow-xl overflow-hidden">
       {/* ── Foreground Chat Interface ── */}
-      <div className="seva-chat-content px-4 sm:px-6 pt-4 pb-4">
+      <div className="seva-chat-content px-4 sm:px-6 pt-4 pb-4 flex flex-col h-full">
         {/* ── STATE 1: LOADING ── */}
         {loading ? (
           <div className="flex flex-col items-center justify-center flex-1 min-h-[60vh] space-y-4">
@@ -160,19 +137,19 @@ export default function Chat() {
         ) : (
           <>
       {/* ── Chat Header ── */}
-      <div className="seva-chat-header flex items-center justify-between border-b border-gray-800/80 pb-4 px-2 pt-1 rounded-t-xl shrink-0">
+      <div className="seva-chat-header flex items-center justify-between border-b border-muted pb-4 px-2 pt-1 shrink-0">
         <div className="flex items-center gap-3">
           <div className="p-2.5 bg-accent/10 border border-accent/30 rounded-xl text-accent">
-            <MessageSquare size={24} style={{ filter: 'drop-shadow(0 0 6px rgba(0,217,255,0.5))' }} />
+            <MessageSquare size={24} />
           </div>
           <div>
-            <h1 className="font-heading font-bold text-2xl text-text-primary flex items-center gap-2">
+            <h1 className="font-heading font-bold text-2xl text-text-primary flex items-center gap-2.5">
               SEVA Conversational Assistant
-              <span className="text-[10px] uppercase font-bold tracking-wider text-accent bg-accent/10 px-2 py-0.5 rounded border border-accent/30">
-                Phi-3.5 Local AI
+              <span className="text-xs uppercase font-bold tracking-wider text-accent bg-accent/10 px-2.5 py-0.5 rounded border border-accent/30">
+                AI Assistant
               </span>
             </h1>
-            <p className="text-text-secondary text-xs">Ask anything about your schedule, deadlines, or daily plan</p>
+            <p className="text-text-secondary text-sm mt-0.5">Ask anything about your schedule, deadlines, or daily plan</p>
           </div>
         </div>
 
@@ -239,7 +216,7 @@ export default function Chat() {
                 <button
                   key={idx}
                   onClick={() => handleSendMessage(suggestion)}
-                  className="p-3 bg-card-bg hover:bg-gray-800/80 border border-gray-800 hover:border-accent/40 rounded-xl text-xs text-text-primary text-left transition-all cursor-pointer"
+                  className="p-3 bg-panel hover:bg-muted/80 border border-muted hover:border-accent/40 rounded-xl text-sm font-medium text-text-primary text-left transition-all cursor-pointer"
                 >
                   "{suggestion}"
                 </button>
@@ -258,29 +235,29 @@ export default function Chat() {
                 className={`flex gap-3 max-w-3xl ${isUser ? 'ml-auto flex-row-reverse' : 'mr-auto'}`}
               >
                 {/* Avatar Icon */}
-                <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 border ${
+                <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border ${
                   isUser 
                     ? 'bg-accent/20 border-accent/40 text-accent' 
-                    : 'bg-card-bg border-gray-800 text-accent'
+                    : 'bg-panel border-muted text-accent'
                 }`}>
-                  {isUser ? <User size={16} /> : <Bot size={16} />}
+                  {isUser ? <User size={18} /> : <Bot size={18} />}
                 </div>
 
                 {/* Message Container */}
-                <div className="space-y-1 min-w-0 max-w-[85%] sm:max-w-[75%]">
-                  <div className={`p-4 rounded-2xl text-xs sm:text-sm leading-relaxed whitespace-pre-wrap shadow-lg ${
+                <div className="space-y-1.5 min-w-0 max-w-[85%] sm:max-w-[75%]">
+                  <div className={`p-4 rounded-2xl text-sm sm:text-base leading-relaxed whitespace-pre-wrap ${
                     isUser 
                       ? 'bg-accent text-dark-bg font-medium rounded-tr-none' 
-                      : 'bg-card-bg border border-gray-800 text-text-primary rounded-tl-none'
+                      : 'bg-panel border border-muted text-text-primary rounded-tl-none'
                   }`}>
                     {msg.message}
                   </div>
 
                   {/* Timestamp & Error indicator */}
-                  <div className={`flex items-center gap-2 text-[10px] text-text-secondary px-1 ${
+                  <div className={`flex items-center gap-2 text-xs text-text-secondary px-1 ${
                     isUser ? 'justify-end' : 'justify-start'
                   }`}>
-                    <Clock size={10} />
+                    <Clock size={12} />
                     <span>{msg.timestamp || 'Today'}</span>
                     
                     {hasFailed && (
@@ -288,7 +265,7 @@ export default function Chat() {
                         onClick={() => handleSendMessage(msg.message, msg.client_request_id || msg.id)}
                         className="text-red-400 font-semibold cursor-pointer hover:underline flex items-center gap-1"
                       >
-                        <AlertCircle size={10} /> Failed — Tap to retry
+                        <AlertCircle size={12} /> Failed — Tap to retry
                       </span>
                     )}
                   </div>
@@ -301,12 +278,12 @@ export default function Chat() {
         {/* ── Typing Indicator (when AI is thinking) ── */}
         {isSending && (
           <div className="flex gap-3 max-w-3xl mr-auto animate-in fade-in duration-200">
-            <div className="w-8 h-8 rounded-xl bg-card-bg border border-gray-800 text-accent flex items-center justify-center shrink-0">
-              <Bot size={16} />
+            <div className="w-9 h-9 rounded-xl bg-panel border border-muted text-accent flex items-center justify-center shrink-0">
+              <Bot size={18} />
             </div>
-            <div className="p-3.5 bg-card-bg border border-gray-800 rounded-2xl rounded-tl-none flex items-center gap-2.5 text-xs text-text-secondary">
-              <Sparkles size={14} className="text-accent animate-spin" />
-              <span>SEVA is thinking with Phi-3.5...</span>
+            <div className="p-4 bg-panel border border-muted rounded-2xl rounded-tl-none flex items-center gap-3 text-sm text-text-secondary">
+              <Sparkles size={16} className="text-accent animate-spin" />
+              <span>SEVA is thinking...</span>
               <div className="flex items-center gap-1 ml-1">
                 <div className="w-1.5 h-1.5 bg-accent rounded-full animate-bounce [animation-delay:-0.3s]"></div>
                 <div className="w-1.5 h-1.5 bg-accent rounded-full animate-bounce [animation-delay:-0.15s]"></div>
@@ -321,7 +298,7 @@ export default function Chat() {
 
       {/* ── Fixed Bottom Input Bar ── */}
       <div className="pt-2 shrink-0">
-        <div className="bg-card-bg border border-gray-800 rounded-2xl p-2 sm:p-2.5 flex items-end gap-2 focus-within:border-accent/60 transition-all shadow-xl">
+        <div className="bg-panel border border-muted rounded-2xl p-2.5 sm:p-3 flex items-end gap-2.5 focus-within:border-accent/60 transition-all">
           <textarea
             ref={inputRef}
             rows={1}
@@ -330,20 +307,20 @@ export default function Chat() {
             onKeyDown={handleKeyDown}
             placeholder="Ask SEVA about your schedule, deadlines, or tasks... (Press Enter to send)"
             disabled={isSending}
-            className="flex-1 bg-transparent text-xs sm:text-sm text-text-primary placeholder:text-text-secondary px-3 py-2 focus:outline-none resize-none max-h-24 min-h-[38px]"
+            className="flex-1 bg-transparent text-sm sm:text-base text-text-primary placeholder:text-text-secondary px-3 py-2 focus:outline-none resize-none max-h-28 min-h-[42px]"
           />
 
           <button
             onClick={() => handleSendMessage()}
             disabled={isSending || !inputMsg.trim()}
-            className="p-2.5 bg-accent hover:bg-accent/90 text-dark-bg rounded-xl transition-all cursor-pointer disabled:opacity-40 shrink-0 shadow-md shadow-accent/20"
+            className="p-3 bg-accent hover:bg-accent/90 text-dark-bg rounded-xl transition-all cursor-pointer disabled:opacity-40 shrink-0"
             title="Send message"
           >
-            <Send size={16} />
+            <Send size={18} />
           </button>
         </div>
-        <p className="text-[10px] text-text-secondary text-center mt-2">
-          SEVA AI reads your active day plan and emails to assist you. Responses take ~30–60s depending on local Ollama hardware.
+        <p className="text-xs text-text-secondary text-center mt-2.5">
+          SEVA AI reads your active day plan and emails to assist you.
         </p>
       </div>
           </>

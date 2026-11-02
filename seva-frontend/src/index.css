@@ -15,9 +15,10 @@ html, body, #root {
 
 body {
   font-family: 'Inter', sans-serif;
-  background: linear-gradient(135deg, #050b1a 0%, #0a1128 50%, #0d1a35 100%);
+  background-color: #050b1a;
+  background-image: radial-gradient(circle at 50% 0%, #0a1630 0%, #050b1a 80%);
   background-attachment: fixed;
-  color: #f0f6ff;
+  color: #f8fafc;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -25,6 +26,7 @@ body {
 /* ─── Custom Scrollbar ───────────────────────────────────────────── */
 ::-webkit-scrollbar {
   width: 6px;
+  height: 6px;
 }
 ::-webkit-scrollbar-track {
   background: #050b1a;
@@ -34,33 +36,24 @@ body {
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #00d9ff44;
-}
-
-/* ─── Utility: Accent Glow Text ──────────────────────────────────── */
-.text-glow {
-  text-shadow: 0 0 20px rgba(0, 217, 255, 0.6);
+  background: #2563eb;
 }
 
 /* ─── Utility: Transition Default ───────────────────────────────── */
 .transition-seva {
-  transition: all 0.25s ease;
+  transition: all 0.2s ease;
 }
 
-/* ─── Translucent Dark Glass Surfaces Over Animated Backgrounds ─── */
+/* ─── Solid Navy Surfaces for Cards & Panels ────────────────────── */
 .bg-card-bg {
-  background-color: rgba(10, 17, 40, 0.78);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  background-color: #0d172e;
 }
 
 .bg-dark-bg,
 .bg-dark-bg\/80,
 .bg-dark-bg\/70,
 .bg-dark-bg\/60 {
-  background-color: rgba(5, 11, 26, 0.78);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  background-color: #080f1e;
 }
 
 .text-dark-bg {

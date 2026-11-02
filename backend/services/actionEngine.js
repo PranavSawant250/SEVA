@@ -90,7 +90,8 @@ function findMatchingGoal(query, goals = null) {
     'spring': ['spring boot', 'spring', 'backend', 'java'],
     'spring boot': ['spring boot', 'spring'],
     'database': ['database', 'db', 'sql'],
-    'run': ['run', 'running', 'jog']
+    'run': ['run', 'running', 'jog', 'ran', 'daily run'],
+    'ran': ['run', 'running', 'daily run', 'jog']
   };
 
   let searchTerms = [q];
