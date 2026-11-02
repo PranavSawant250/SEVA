@@ -149,15 +149,21 @@ export default function Dashboard() {
   const handleGeneratePlan = async () => {
     setGeneratingPlan(true);
     try {
-      const res = await client.get('/plan/generate');
+      let res = await client.get('/plan/generate');
+      if (res.data.needs_window) {
+        // Auto-initialize daily window till 11:00 PM if user clicked Generate without setting a window
+        await client.put('/settings/today', { window_end_time: '11:00 PM', done_for_day: false });
+        res = await client.get('/plan/generate');
+      }
       if (res.data.success) {
         await fetchDashboardData(); // Refresh top priorities and stats
+        navigate('/dayplan');
       } else {
-        alert('Plan generation failed: ' + (res.data.error || 'Unknown error'));
+        alert(res.data.message || res.data.error || 'Plan generation failed.');
       }
     } catch (err) {
       console.error('[SEVA] Plan generation failed:', err);
-      alert('Error generating plan with AI: ' + (err.response?.data?.error || err.message));
+      alert('Error generating plan: ' + (err.response?.data?.error || err.message));
     } finally {
       setGeneratingPlan(false);
     }

@@ -35,6 +35,8 @@ export default function DayPlan() {
   const [hasPlan, setHasPlan] = useState(false);
   const [todayDate, setTodayDate] = useState('');
   const [deferredItems, setDeferredItems] = useState([]);
+  // eslint-disable-next-line no-unused-vars
+  const [shrunkItems, setShrunkItems] = useState([]);
   const [floorSessions, setFloorSessions] = useState([]);
   const [warnings, setWarnings] = useState([]);
   const [planNote, setPlanNote] = useState('');
@@ -214,13 +216,14 @@ export default function DayPlan() {
     setGeneratingPlan(true);
     setErrorMsg('');
     try {
-      const res = await client.get('/plan/generate');
+      let res = await client.get('/plan/generate');
+      if (res.data.needs_window) {
+        // If window is not set, initialize to 11:00 PM and generate
+        await client.put('/settings/today', { window_end_time: '11:00 PM', done_for_day: false });
+        res = await client.get('/plan/generate');
+      }
       if (res.data.success) {
         await applyScheduleResponse(res.data);
-      } else if (res.data.needs_window) {
-        setNeedsWindow(true);
-        setWindowPromptMsg(res.data.message || 'No daily window is set. Tell SEVA your free window first.');
-        setWindowHint(res.data.hint || '');
       } else {
         setErrorMsg(res.data.message || res.data.error || 'Failed to generate plan.');
       }
