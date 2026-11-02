@@ -17,7 +17,7 @@ const crypto = require('crypto');
 const db = require('../database/db');
 const { getToolByName, getGeminiFunctionDeclarations, resolveTargetDate } = require('./chatTools');
 const { processNaturalLanguageAction } = require('./actionEngine');
-const { routeCommand } = require('./chatCommands');
+const { routeCommand, getPendingState } = require('./chatCommands');
 const { chatWithSeva } = require('./aiService');
 const { getTodayDate } = require('../utils/dateUtils');
 
@@ -246,12 +246,21 @@ RULES & BEHAVIOR:
 2. AMBIGUITY & INCOMPLETE REQUESTS (CALL ask_user):
    - If the user expresses an intent to mutate data (log progress, complete a task/step, update a task, remove an item) but omits essential information (e.g., "Log some progress on my goals", "Update task", "Complete it", "Mark one item done"), DO NOT GUESS and DO NOT call get_goals instead!
    - You MUST call "ask_user" with a short, helpful clarification question asking which goal or task and what amount they want to update.
+   - DO NOT treat "ran today" as ambiguous! "ran today" is a completed run session report. If an active frequency goal like "Daily run" exists and is unambiguous, call "log_goal_progress" with goal_identifier: "Daily run" and amount: 1. Do not ask for duration, distance, or which goal unless multiple running goals exist.
+   - DO NOT treat "delete all my goals" as ambiguous! It is an explicit bulk removal command. Call "request_removal" with type: "goal", identifier: "all my goals". DO NOT call ask_user for "delete all my goals".
 
 3. ACTIONS & WORKFLOW:
    - When the user reports COMPLETED work, call "log_goal_progress", "complete_goal_step", or "complete_task".
-   - FREQUENCY GOALS (e.g. "Daily run", workout): When the user logs a run (e.g. "5km run, count it", "ran today"), call "log_goal_progress" with goal_identifier: "Daily run" and amount: 1 (each run counts as 1 session towards weekly target, NOT the distance). If distance is given (e.g. 5km), pass note: "5 km".
+   - FREQUENCY GOALS (e.g. "Daily run", workout): When the user logs a run (e.g. "5km run, count it", "ran today", "did my run", "went for a run today"):
+     Inspect active goals. If an active frequency goal like "Daily run" exists and is unambiguous, DO NOT call ask_user! Immediately call "log_goal_progress" with goal_identifier: "Daily run" and amount: 1 (each run counts strictly as 1 session towards weekly target, NOT the distance or duration). If distance is given (e.g. 5km), pass note: "5 km". Do not ask the user to distinguish session from duration. If multiple plausible running goals exist, only then ask for clarification.
+   - RESCHEDULING AMBIGUITY (e.g. "move my session to 4", "reschedule to 4"):
+     When the user asks to move or reschedule a session or task without identifying which session (e.g. "my session", "the session") or without specifying AM vs PM (e.g. "to 4"):
+     DO NOT execute update_task, and do not repeat get_tasks in a loop!
+     Call "ask_user" asking: "Which session would you like to move, and do you mean 4:00 AM or 4:00 PM?"
+     Make ZERO changes to any task.
    - When the user expresses a FUTURE intention or plan, call "add_task". NEVER log progress or mark goals complete for future plans!
-   - When the user asks to delete or remove something (e.g. "delete task X", "delete all my goals"), call "request_removal". Do not attempt to confirm deletions yourself.
+   - BULK AND SINGLE REMOVALS (e.g. "delete task X", "delete all my goals"):
+     Call "request_removal" with the target item or "all my goals". "request_removal" will list all active goals and formulate the required confirmation question. Do not attempt to confirm deletions yourself and DO NOT call ask_user after request_removal.
    - REFERENCE RESOLUTION: Use the last N conversation turns to resolve pronouns or ordinal references like "that task", "the second goal", "it". If ambiguous, call "ask_user".
    - Multiple actions in one message are allowed (e.g. "I finished BFS and add German study for tomorrow").
 
@@ -526,6 +535,24 @@ async function processAgentChatMessage(userMessage, options = {}) {
     };
   }
 
+  // 1b. Check if an active deterministic pending confirmation exists (e.g. yes/no to deletion)
+  const pendingState = getPendingState();
+  if (pendingState) {
+    const cmdReply = routeCommand(userMessage, todayDate, nowDate);
+    if (cmdReply !== null) {
+      const responseObj = {
+        success: true,
+        reply: cmdReply,
+        provider: 'Local (Pending Confirmation)',
+        badge: 'Local (Confirmation)',
+        actions: [{ tool: 'confirm_removal', args: { message: userMessage }, result: { success: true, message: cmdReply } }],
+        updated: ['Goals', 'Day Plan']
+      };
+      storeCompletedRequest(validatedSessionId, clientRequestId, responseObj, activeDb);
+      return responseObj;
+    }
+  }
+
   const apiKey = (process.env.GEMINI_API_KEY || '').trim();
   const provider = (process.env.AI_PROVIDER || options.preferredProvider || (apiKey ? 'gemini' : 'ollama')).toLowerCase();
 
@@ -632,6 +659,18 @@ async function processAgentChatMessage(userMessage, options = {}) {
           name: fc.name,
           response: result
         });
+      }
+
+      // Break early if a terminal interaction was executed (request_removal pending confirmation, or ask_user clarification)
+      const pendingRemoval = executedActions.find(a => a.tool === 'request_removal' && a.result && a.result.pending_confirmation);
+      if (pendingRemoval) {
+        finalReply = pendingRemoval.result.message;
+        break;
+      }
+      const askUserAction = executedActions.find(a => a.tool === 'ask_user' && a.result);
+      if (askUserAction) {
+        finalReply = askUserAction.result.message || askUserAction.args?.question;
+        break;
       }
 
       // Append assistant candidate content directly (preserving thought signatures & metadata)

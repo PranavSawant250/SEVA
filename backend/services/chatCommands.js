@@ -371,30 +371,121 @@ function handleStepsFor(message) {
 
 // ─────────────────────────────────────────────────────────────
 // 6. REMOVAL COMMANDS
-// "remove goal <text>", "delete goal <text>", "remove task <text>"
+// "remove goal <text>", "delete goal <text>", "delete my <text> goal", "remove task <text>"
 // ─────────────────────────────────────────────────────────────
-const RE_REMOVE_GOAL = /^\s*(?:remove|delete)\s+goal\s+(.+?)\s*$/i;
-const RE_REMOVE_TASK = /^\s*remove\s+task\s+(.+?)\s*$/i;
+const RE_REMOVE_GOAL = /^\s*(?:remove|delete)\s+(?:all\s+my\s+goals|all\s+goals|(?:the\s+|my\s+)?goal\s+(.+?)|(?:the\s+|my\s+)?(.+?)\s+goal)\s*$/i;
+const RE_REMOVE_TASK = /^\s*(?:remove|delete)\s+(?:the\s+|my\s+)?(?:task\s+(.+?)|(.+?)\s+task)\s*$/i;
 
 function handleRemovalCommand(message, todayDate) {
   const todayStr = getTodayDate(todayDate);
+  const clean = (message || '').trim().replace(/[\.\?!]+$/, '');
 
-  const mGoal = message.match(RE_REMOVE_GOAL);
-  if (mGoal) {
-    return initiateRemoval('goal', mGoal[1].trim(), todayStr);
+  if (/^\s*(?:remove|delete)\s+all\s+(?:my\s+)?goals\s*$/i.test(clean)) {
+    return initiateRemoval('goal', 'all my goals', todayStr);
   }
 
-  const mTask = message.match(RE_REMOVE_TASK);
+  const mGoal = clean.match(RE_REMOVE_GOAL);
+  if (mGoal) {
+    const q = (mGoal[1] || mGoal[2] || '').trim();
+    if (q) return initiateRemoval('goal', q, todayStr);
+  }
+
+  const mTask = clean.match(RE_REMOVE_TASK);
   if (mTask) {
-    return initiateRemoval('task', mTask[1].trim(), todayStr);
+    const q = (mTask[1] || mTask[2] || '').trim();
+    if (q) return initiateRemoval('task', q, todayStr);
   }
 
   return null;
 }
 
+/**
+ * Handle removal from daily plan:
+ * "Remove Shell Scripting from my daily plan.", "Remove Database from schedule"
+ */
+function handlePlanRemoval(message, todayDate) {
+  const cleanMsg = (message || '').trim();
+  const re = /^\s*(?:remove|delete|drop)\s+(.+?)\s+from\s+(?:my\s+)?(?:daily\s+plan|day\s+plan|today(?:'s)?\s+plan|plan|schedule)\s*$/i;
+  const match = cleanMsg.match(re);
+  if (!match) return null;
+
+  let query = match[1].trim();
+  query = query.replace(/^['"]|['"]$/g, '').trim();
+  if (!query) return null;
+
+  const todayStr = getTodayDate(todayDate);
+  const planRow = db.prepare('SELECT id, plan_json FROM day_plans WHERE date = ?').get(todayStr);
+  let planItems = [];
+  if (planRow && planRow.plan_json) {
+    try { planItems = JSON.parse(planRow.plan_json); } catch (_) {}
+  }
+
+  const qLower = query.toLowerCase();
+  const matchingIndices = [];
+
+  planItems.forEach((item, idx) => {
+    const taskName = (item.task || '').toLowerCase();
+    if (taskName === qLower || taskName.includes(qLower)) {
+      matchingIndices.push(idx);
+    }
+  });
+
+  if (matchingIndices.length > 1) {
+    const titles = matchingIndices.map(i => `"${planItems[i].task}"`).join(' and ');
+    return `Multiple items in your daily plan match "${query}": ${titles}. Which one would you like to remove?`;
+  }
+
+  if (matchingIndices.length === 1) {
+    const removedItem = planItems.splice(matchingIndices[0], 1)[0];
+    db.prepare('UPDATE day_plans SET plan_json = ? WHERE id = ?').run(JSON.stringify(planItems), planRow.id);
+
+    if (removedItem.task_id) {
+      db.prepare('DELETE FROM tasks WHERE id = ? AND completed = 0').run(removedItem.task_id);
+    }
+
+    return `Removed "${removedItem.task}" from your daily plan for today.`;
+  }
+
+  // Not in day_plans: check today's tasks
+  const todayTasks = db.prepare('SELECT id, name FROM tasks WHERE date = ? AND completed = 0').all(todayStr);
+  const matchingTasks = todayTasks.filter(t => t.name.toLowerCase().includes(qLower));
+
+  if (matchingTasks.length === 1) {
+    db.prepare('DELETE FROM tasks WHERE id = ?').run(matchingTasks[0].id);
+    return `Removed "${matchingTasks[0].name}" from your tasks for today.`;
+  }
+
+  // If absent from today's plan: inspect all relevant records (goals, tasks on other dates)
+  const { findMatchingGoal } = require('./actionEngine');
+  const { match: goalMatch } = findMatchingGoal(query);
+  let contextNote = '';
+  if (goalMatch) {
+    contextNote = ` (You have an active goal "${goalMatch.title}", but it is not scheduled in today's daily plan.)`;
+  }
+
+  return `"${query}" is not currently in your daily plan for today, so nothing was removed.${contextNote}`;
+}
+
 function initiateRemoval(type, query, todayStr) {
   let candidates;
   if (type === 'goal') {
+    if (/^(?:all\s+my\s+goals|all\s+goals|all)$/i.test(query)) {
+      const activeGoals = db.prepare("SELECT id, title FROM goals WHERE status = 'active'").all();
+      if (activeGoals.length === 0) return 'No active goals found to remove.';
+      const targetIds = activeGoals.map(g => g.id);
+      const goalListDesc = activeGoals.map(g => `"${g.title}" (ID: ${g.id})`).join(', ');
+      const cancelNote = consumeActivePendingCancellationNotice();
+      pendingState = {
+        type: 'removal',
+        removalType: 'goal',
+        targetId: targetIds[0],
+        targetIds,
+        targetTitle: `all active goals [${goalListDesc}]`,
+        todayStr,
+        expiresAt: Date.now() + removalTimeoutMs
+      };
+      return `${cancelNote}Remove all ${activeGoals.length} active goals (${goalListDesc})? Reply yes to confirm (or no to cancel). This expires in 2 minutes.`;
+    }
     candidates = db.prepare("SELECT id, title FROM goals WHERE status = 'active'").all()
       .map(g => ({ id: g.id, ids: [g.id], title: g.title }));
   } else {
@@ -475,6 +566,10 @@ function routeCommand(message, todayDate, now) {
   // Evaluated FIRST so valid natural language operations are never intercepted by a stale session or fall through to AI
   const actionReply = processNaturalLanguageAction(message, todayDt, nowDate);
   if (actionReply !== null) return actionReply;
+
+  // 1.5 Plan Removal ("remove Shell Scripting from my daily plan")
+  const planRemovalReply = handlePlanRemoval(message, todayDt);
+  if (planRemovalReply !== null) return planRemovalReply;
 
   // 2. Pending state (removal confirmation or check-in reply)
   const pendingReply = handlePendingState(message, todayDt);

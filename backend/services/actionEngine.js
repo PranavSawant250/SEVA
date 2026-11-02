@@ -23,7 +23,7 @@
  */
 
 const db = require('../database/db');
-const { getTodayDate, parseTimeToMinutes, minutesToTimeString, daysBetween } = require('../utils/dateUtils');
+const { getTodayDate, getTomorrowDate, parseTimeToMinutes, minutesToTimeString, daysBetween } = require('../utils/dateUtils');
 const { getAllGoals, computeGoalProgress } = require('./goalsService');
 const { replan, generateDayPlan } = require('./plannerService');
 
@@ -507,15 +507,23 @@ function handleTaskReschedule(msg, todayDateObj) {
   const match = msg.match(movePattern);
   if (!match) return null;
 
-  const taskQuery = match[1].trim().replace(/\b(?:study\s+session|session|task)\b/gi, '').trim();
+  const rawTaskQuery = match[1].trim();
+  const taskQuery = rawTaskQuery.replace(/\b(?:study\s+session|session|task)\b/gi, '').trim();
   let timeStr = match[2].trim();
+  const hasAmPm = /(?:am|pm)/i.test(timeStr);
+  const rawHour = parseInt(timeStr, 10);
 
-  // Ambiguity check: e.g. "Move database study to 4" (missing AM/PM)
-  if (!/(?:am|pm)/i.test(timeStr)) {
-    const rawHour = parseInt(timeStr, 10);
-    if (!isNaN(rawHour) && rawHour >= 1 && rawHour <= 12) {
-      return `Do you mean ${rawHour} PM today?`;
-    }
+  const isGeneric = !taskQuery || ['my', 'the', 'this', 'a', ''].includes(taskQuery.toLowerCase());
+
+  // Ambiguity check: e.g. "move my session to 4" (omits which session and AM/PM)
+  if (isGeneric && !hasAmPm) {
+    return 'Which session would you like to move, and do you mean 4:00 AM or 4:00 PM?';
+  }
+  if (isGeneric && hasAmPm) {
+    return 'Which session would you like to move?';
+  }
+  if (!hasAmPm && !isNaN(rawHour) && rawHour >= 1 && rawHour <= 12) {
+    return `Do you mean ${rawHour} PM today?`;
   }
 
   // Normalize time string (e.g. "5 PM" -> "5:00 PM")
@@ -714,6 +722,82 @@ function handleAvailabilityUpdate(msg, todayDateObj, nowDate) {
 }
 
 /**
+ * Handle Frequency Goal Progress:
+ * "ran today", "did my run", "5km run, count it", "went for a run today"
+ */
+function handleFrequencyProgress(msg, todayDateObj) {
+  const lower = (msg || '').toLowerCase().trim();
+  // Guard: questions, hypotheticals, future plans
+  if (/\b(?:should|can|could|would|what\s+if|if\s+i|tomorrow|tonight|later)\b/i.test(lower) || lower.includes('?')) {
+    return null;
+  }
+  // Guard: reported speech
+  if (/\b(?:roommate|friend|doctor|mom|dad|professor|said|told)\b/i.test(lower)) {
+    return null;
+  }
+  // Guard: habit skip ("didn't run")
+  if (/\b(?:didn't|did\s+not|skipped|couldn't)\b/i.test(lower)) {
+    return null;
+  }
+
+  const runPattern = /\b(?:i\s+)?(?:ran|went\s+for\s+a\s+run|completed\s+my\s+run|did\s+my\s+run|jogged)(?:\s+today)?\b|\b(\d+(?:\.\d+)?\s*(?:km|miles?|m))?\s*run(?:,\s*count\s+it)?\b/i;
+  const match = lower.match(runPattern);
+  if (!match) return null;
+
+  // Find active frequency goals
+  const activeFreqGoals = db.prepare("SELECT * FROM goals WHERE status = 'active' AND goal_type = 'frequency'").all();
+  if (activeFreqGoals.length === 0) return null;
+
+  const runGoals = activeFreqGoals.filter(g => g.title.toLowerCase().includes('run') || g.title.toLowerCase().includes('jog'));
+  if (runGoals.length > 1) {
+    const titles = runGoals.map(g => `"${g.title}"`).join(' or ');
+    return `Did you mean ${titles}? Please specify which run goal you completed.`;
+  }
+
+  const goal = runGoals.length === 1 ? runGoals[0] : (activeFreqGoals.length === 1 ? activeFreqGoals[0] : null);
+  if (!goal) return null;
+
+  const todayStr = getTodayDate(todayDateObj);
+  const currentCount = goal.current_count || 0;
+  const targetCount = goal.per_week || 5;
+  const newCount = currentCount + 1;
+  const reached = newCount >= targetCount;
+
+  let auditNote = 'chat:frequency:1';
+  if (match[1]) auditNote = `${match[1].trim()} - chat:frequency:1`;
+
+  const tx = db.transaction(() => {
+    db.prepare(`
+      UPDATE goals
+      SET current_count = ?, status = ?, completed_date = ?
+      WHERE id = ?
+    `).run(newCount, reached ? 'completed' : 'active', reached ? todayStr : null, goal.id);
+
+    db.prepare(`
+      INSERT INTO goal_progress_log (goal_id, date, amount, note)
+      VALUES (?, ?, 1, ?)
+    `).run(goal.id, todayStr, auditNote);
+
+    // Sync matching task if any
+    const task = db.prepare(`
+      SELECT id FROM tasks
+      WHERE (goal_id = ? OR LOWER(name) LIKE ?) AND date = ? AND completed = 0
+      LIMIT 1
+    `).get(goal.id, `%${goal.title.toLowerCase()}%`, todayStr);
+
+    if (task) {
+      db.prepare('UPDATE tasks SET completed = 1 WHERE id = ?').run(task.id);
+    }
+  });
+
+  tx();
+
+  return reached
+    ? `Logged 1 session for ${goal.title}. Weekly target reached: ${newCount}/${targetCount}!`
+    : `Logged 1 session for ${goal.title}. Progress: ${currentCount}/${targetCount} → ${newCount}/${targetCount}.`;
+}
+
+/**
  * Handle Habit Acknowledgment:
  * "I didn't run today", "Skipped running today"
  */
@@ -760,45 +844,143 @@ function handleEmailQuery(msg) {
  * "I want a 45-minute DSA session today", "Add a 30 min task for Database"
  */
 function handleAddTask(msg, todayDateObj) {
-  const addTaskPattern = /\b(?:i\s+want\s+a|add\s+(?:a\s+)?|schedule\s+(?:a\s+)?)\s*(\d+)\s*(?:-|–|\s+)?(min|minutes?|hours?|hrs?)\s+(.+?)(?:\s+session|\s+task)?(?:\s+today)?(?:\.|$)/i;
-  const match = msg.match(addTaskPattern);
-  if (!match) return null;
+  const clean = (msg || '').trim();
+  const lower = clean.toLowerCase();
 
-  const rawDuration = parseInt(match[1], 10);
-  const unit = match[2].toLowerCase();
-  const duration = unit.startsWith('h') ? rawDuration * 60 : rawDuration;
-  const taskName = match[3].trim();
-  const todayStr = getTodayDate(todayDateObj);
+  // Exclude non-task intents:
+  // - progress reporting: "did 3 leetcode today", "solved 2 problems", "completed bfs topic"
+  if (/^(?:did|solved|completed|finished)\s+\d+/i.test(lower)) return null;
+  // - habit notice: "didn't run today"
+  if (/\b(?:didn't|skipped)\s+(?:run|jog|workout)/i.test(lower)) return null;
+  // - removals: "remove ...", "delete ..."
+  if (/^(?:remove|delete|drop)\b/i.test(lower)) return null;
+  // - questions / status: "what...", "how...", "show...", "is...", "should i...", "can i..."
+  if (/^(?:what|how|show|is|should|can|why|who|where|will)\b/i.test(lower)) return null;
+
+  // Task creation indicators:
+  const isTaskIntent = 
+    /^(?:please\s+)?(?:add\s+(?:a\s+)?(?:task|session)?|schedule\s+(?:a\s+)?(?:task|session)?|remind\s+me\s+to|i'll\s+do|i\s+will\s+do|i\s+want\s+a)\b/i.test(clean) ||
+    /\b(?:add\s+(?:a\s+)?task\s+(?:to|called|named)?|to\s+(?:my\s+)?(?:schedule|daily\s+plan|plan))\b/i.test(clean);
+
+  if (!isTaskIntent) return null;
+
+  // 1. Extract Target Date
+  let targetDate = getTodayDate(todayDateObj);
+  let dateLabel = 'today';
+  if (/\b(?:tomorrow|tmrw|tommorow)\b/i.test(lower)) {
+    targetDate = getTomorrowDate(todayDateObj);
+    dateLabel = `tomorrow (${targetDate})`;
+  } else {
+    // Check specific upcoming weekdays (e.g. "on Wednesday", "next Monday")
+    const daysMap = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
+    const dayMatch = lower.match(/\b(?:on|this|next)?\s*(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i);
+    if (dayMatch && daysMap[dayMatch[1].toLowerCase()] !== undefined) {
+      const targetDay = daysMap[dayMatch[1].toLowerCase()];
+      const currentDt = new Date(todayDateObj instanceof Date ? todayDateObj.getTime() : new Date(todayDateObj).getTime());
+      const currentDay = currentDt.getDay();
+      let diff = targetDay - currentDay;
+      if (diff <= 0) diff += 7; // next occurrence
+      currentDt.setDate(currentDt.getDate() + diff);
+      targetDate = getTodayDate(currentDt);
+      dateLabel = `${dayMatch[1].charAt(0).toUpperCase() + dayMatch[1].slice(1)} (${targetDate})`;
+    }
+  }
+
+  // 2. Extract Priority
+  let priority = 'medium';
+  if (/\b(?:high\s+priority|urgent|highest\s+priority|important)\b/i.test(lower)) {
+    priority = 'high';
+  } else if (/\b(?:low\s+priority|lowest\s+priority)\b/i.test(lower)) {
+    priority = 'low';
+  }
+
+  // 3. Extract Time Slot (e.g. "at 10 AM", "at 4 pm", "at 10:30 AM", "at 16:00")
+  let formattedTime = null;
+  const timeMatch = clean.match(/\bat\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?|\d{1,2}\s*(?:am|pm))\b/i) ||
+                    clean.match(/\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/i);
+  if (timeMatch) {
+    const mins = parseTimeToMinutes(timeMatch[1]);
+    if (mins !== null) {
+      formattedTime = minutesToTimeString(mins);
+    }
+  }
+
+  // 4. Extract Duration (e.g. "45 min", "1 hour", "30 minutes")
+  let duration = 30; // Established SEVA task default
+  const durMatch = clean.match(/\b(\d+)\s*(?:-|–|\s+)?(min|minutes?|hours?|hrs?)\b/i);
+  if (durMatch) {
+    const rawVal = parseInt(durMatch[1], 10);
+    const unit = durMatch[2].toLowerCase();
+    duration = unit.startsWith('h') ? rawVal * 60 : rawVal;
+    if (duration < 15) duration = 15;
+    if (duration > 480) duration = 480;
+  }
+
+  // 5. Extract Task Name
+  let taskName = clean;
+
+  // Check if task name is explicitly enclosed in quotes e.g. "Add a task called 'Mark every goal complete...'"
+  const quoteMatch = clean.match(/['"“]([^'"“”]+)['"”]/);
+  if (quoteMatch && quoteMatch[1].trim().length > 2) {
+    taskName = quoteMatch[1].trim();
+  } else {
+    // Strip leading triggers
+    taskName = taskName.replace(/^(?:please\s+)?(?:add\s+(?:a\s+)?(?:task\s+(?:to\s+|called\s+|named\s+)?|session\s+(?:for\s+)?|schedule\s+(?:a\s+)?)?|schedule\s+(?:a\s+)?|remind\s+me\s+to|i'll\s+do|i\s+will\s+do|i\s+want\s+a)\s+/i, '');
+
+    // Strip target clauses and timestamps from anywhere in the string
+    taskName = taskName.replace(/\bto\s+(?:my\s+)?(?:schedule|daily\s+plan|plan|tasks)\b/gi, '');
+    taskName = taskName.replace(/\bin\s+(?:my\s+)?(?:schedule|daily\s+plan|plan|tasks)\b/gi, '');
+    taskName = taskName.replace(/\bfor\s+(?:tomorrow|today|tonight)\b/gi, '');
+    taskName = taskName.replace(/\b(?:tomorrow\s+evening|tomorrow\s+morning|tomorrow\s+afternoon|tomorrow|today|tonight)\b/gi, '');
+    taskName = taskName.replace(/\bon\s+(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/gi, '');
+    taskName = taskName.replace(/\bat\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?|\d{1,2}\s*(?:am|pm))\b/gi, '');
+    taskName = taskName.replace(/\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/gi, '');
+    taskName = taskName.replace(/\b(\d+)\s*(?:-|–|\s+)?(min|minutes?|hours?|hrs?)\b/gi, '');
+    taskName = taskName.replace(/\b(?:session|task)\b/gi, '');
+    taskName = taskName.replace(/\b(?:high\s+priority|low\s+priority|urgent)\b/gi, '');
+    taskName = taskName.replace(/^[-,\.\s]+|[-,\.\s]+$/g, '').trim();
+  }
+
+  // Final cleanup of task name
+  taskName = taskName.replace(/^to\s+/i, '').trim();
+  if (taskName.length < 2) return null;
+
+  // Capitalize first letter of task name
+  taskName = taskName.charAt(0).toUpperCase() + taskName.slice(1);
 
   // Link to goal if possible
   const { match: goal } = findMatchingGoal(taskName);
 
+  // Atomic database insert
   const res = db.prepare(`
-    INSERT INTO tasks (name, priority, source, completed, date, duration_min, goal_id)
-    VALUES (?, 'medium', 'manual', 0, ?, ?, ?)
-  `).run(taskName, todayStr, duration, goal ? goal.id : null);
+    INSERT INTO tasks (name, priority, source, completed, date, duration_min, time_slot, goal_id)
+    VALUES (?, ?, 'manual', 0, ?, ?, ?, ?)
+  `).run(taskName, priority, targetDate, duration, formattedTime, goal ? goal.id : null);
 
   const newTaskId = res.lastInsertRowid;
 
-  // Add to Day Plan if window is set
-  const planRow = db.prepare('SELECT id, plan_json FROM day_plans WHERE date = ?').get(todayStr);
-  if (planRow && planRow.plan_json) {
-    try {
-      const plan = JSON.parse(planRow.plan_json);
-      plan.push({
-        task_id: newTaskId,
-        task: taskName,
-        priority: 'medium',
-        duration,
-        time: 'flexible',
-        completed: 0,
-        source: 'manual'
-      });
-      db.prepare('UPDATE day_plans SET plan_json = ? WHERE id = ?').run(JSON.stringify(plan), planRow.id);
-    } catch (_) {}
+  // Sync to Day Plan if scheduled for today and plan exists
+  const todayStr = getTodayDate(todayDateObj);
+  if (targetDate === todayStr) {
+    const planRow = db.prepare('SELECT id, plan_json FROM day_plans WHERE date = ?').get(todayStr);
+    if (planRow && planRow.plan_json) {
+      try {
+        const plan = JSON.parse(planRow.plan_json);
+        plan.push({
+          task_id: newTaskId,
+          task: taskName,
+          priority,
+          duration,
+          time: formattedTime || 'flexible',
+          completed: 0,
+          source: 'manual'
+        });
+        db.prepare('UPDATE day_plans SET plan_json = ? WHERE id = ?').run(JSON.stringify(plan), planRow.id);
+      } catch (_) {}
+    }
   }
 
-  return `Added "${taskName}" (${duration} min) to your tasks and Day Plan for today.`;
+  return `Added "${taskName}" (${duration} min, ${priority} priority) scheduled for ${dateLabel}${formattedTime ? ` at ${formattedTime}` : ''}.`;
 }
 
 /**
@@ -1135,6 +1317,10 @@ function processNaturalLanguageAction(message, todayDateObj = new Date(), nowDat
   // 3. Goal Progress Logging ("I completed two DSA problems", "I solved two LeetCode problems")
   const countReply = handleCountProgress(msg, todayDateObj);
   if (countReply !== null) return countReply;
+
+  // 3.5. Frequency Progress Logging ("ran today", "did my run", "5km run, count it")
+  const freqReply = handleFrequencyProgress(msg, todayDateObj);
+  if (freqReply !== null) return freqReply;
 
   // 4. Progress Correction ("Correction: I solved only 1 DSA problem")
   const corrReply = handleGoalCorrection(msg, todayDateObj);
