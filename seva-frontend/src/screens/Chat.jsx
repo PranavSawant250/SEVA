@@ -92,7 +92,12 @@ export default function Chat() {
         // Re-fetch chat history from server to get persistent DB row IDs
         const historyRes = await client.get('/chat/history');
         if (historyRes.data.success) {
-          setMessages(historyRes.data.messages || []);
+          const fetchedMessages = historyRes.data.messages || [];
+          if (fetchedMessages.length > 0 && fetchedMessages[fetchedMessages.length - 1].role === 'assistant') {
+            fetchedMessages[fetchedMessages.length - 1].provider = res.data.provider;
+            fetchedMessages[fetchedMessages.length - 1].badge = res.data.badge;
+          }
+          setMessages(fetchedMessages);
         } else {
           // Fallback append AI response
           setMessages(prev => [
@@ -101,17 +106,42 @@ export default function Chat() {
               id: 'assistant-' + Date.now(),
               role: 'assistant',
               message: res.data.reply,
+              provider: res.data.provider,
+              badge: res.data.badge,
               timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
             }
           ]);
         }
       } else {
         setSendErrorId(tempUserMsgId);
+        if (res.data?.reply) {
+          setMessages(prev => [
+            ...prev,
+            {
+              id: 'assistant-err-' + Date.now(),
+              role: 'assistant',
+              message: res.data.reply,
+              provider: res.data.provider || 'Offline / Error',
+              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            }
+          ]);
+        }
       }
 
     } catch (err) {
       console.error('[SEVA] Chat send error:', err);
       setSendErrorId(tempUserMsgId);
+      const errMsg = err.response?.data?.reply || err.response?.data?.error || err.message || 'Unable to reach backend';
+      setMessages(prev => [
+        ...prev,
+        {
+          id: 'assistant-err-' + Date.now(),
+          role: 'assistant',
+          message: `⚠️ ${errMsg}`,
+          provider: 'Error',
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        }
+      ]);
     } finally {
       setIsSending(false);
     }
@@ -253,12 +283,24 @@ export default function Chat() {
                     {msg.message}
                   </div>
 
-                  {/* Timestamp & Error indicator */}
+                  {/* Timestamp, Provider & Error indicator */}
                   <div className={`flex items-center gap-2 text-xs text-text-secondary px-1 ${
                     isUser ? 'justify-end' : 'justify-start'
                   }`}>
                     <Clock size={12} />
                     <span>{msg.timestamp || 'Today'}</span>
+
+                    {!isUser && msg.provider && (
+                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${
+                        msg.provider.includes('Cloud') 
+                          ? 'bg-blue-500/10 text-blue-400 border-blue-500/30' 
+                          : msg.provider.includes('Ollama')
+                          ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                          : 'bg-purple-500/10 text-purple-400 border-purple-500/30'
+                      }`}>
+                        {msg.provider}
+                      </span>
+                    )}
                     
                     {hasFailed && (
                       <span 
@@ -305,7 +347,7 @@ export default function Chat() {
             value={inputMsg}
             onChange={(e) => setInputMsg(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask SEVA about your schedule, deadlines, or tasks... (Press Enter to send)"
+            placeholder="Ask SEVA about your schedule, deadlines, or tasks..."
             disabled={isSending}
             className="flex-1 bg-transparent text-sm sm:text-base text-text-primary placeholder:text-text-secondary px-3 py-2 focus:outline-none resize-none max-h-28 min-h-[42px]"
           />

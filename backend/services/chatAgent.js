@@ -272,12 +272,119 @@ function hasActionIntent(msg) {
 }
 
 /**
+ * Robust error parser for Google GenAI / Gemini API errors.
+ * Extracts status, error status, retryDelay, and quota failure details.
+ */
+function parseGeminiError(err) {
+  let details = null;
+  let retryDelaySeconds = null;
+  let isDailyQuotaExhausted = false;
+  let isResourceExhausted = false;
+  let status = err.status || null;
+  let quotaMetric = null;
+  let quotaId = null;
+
+  try {
+    const raw = typeof err.message === 'string' ? err.message.trim() : '';
+    const firstBrace = raw.indexOf('{');
+    const lastBrace = raw.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      const parsed = JSON.parse(raw.substring(firstBrace, lastBrace + 1));
+      if (parsed && parsed.error) {
+        status = parsed.error.code || status;
+        if (parsed.error.status === 'RESOURCE_EXHAUSTED') isResourceExhausted = true;
+        if (Array.isArray(parsed.error.details)) {
+          for (const item of parsed.error.details) {
+            if (item['@type']?.includes('RetryInfo') && item.retryDelay) {
+              const m = String(item.retryDelay).match(/^(\d+(?:\.\d+)?)s$/);
+              if (m) retryDelaySeconds = parseFloat(m[1]);
+            }
+            if (item['@type']?.includes('QuotaFailure') && Array.isArray(item.violations)) {
+              for (const v of item.violations) {
+                quotaMetric = v.quotaMetric || quotaMetric;
+                quotaId = v.quotaId || quotaId;
+                if (v.quotaId?.toLowerCase().includes('perday') || v.description?.toLowerCase().includes('per day')) {
+                  isDailyQuotaExhausted = true;
+                }
+              }
+            }
+          }
+        }
+        if (parsed.error.message?.toLowerCase().includes('per day limit exceeded')) {
+          isDailyQuotaExhausted = true;
+        }
+      }
+    }
+  } catch (_) {}
+
+  const rawMsg = (err.message || '').toLowerCase();
+  if (rawMsg.includes('resource_exhausted')) isResourceExhausted = true;
+  if (rawMsg.includes('per day limit exceeded') || rawMsg.includes('requests per day')) isDailyQuotaExhausted = true;
+  if (retryDelaySeconds !== null && retryDelaySeconds > 60) {
+    isDailyQuotaExhausted = true;
+  }
+
+  const isRateLimit = status === 429 || isResourceExhausted || rawMsg.includes('429');
+  const isUnavailable = status === 503 || rawMsg.includes('high demand') || rawMsg.includes('unavailable');
+
+  return {
+    status,
+    isRateLimit,
+    isUnavailable,
+    isDailyQuotaExhausted,
+    retryDelaySeconds,
+    quotaMetric,
+    quotaId,
+    rawError: err
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
+// IN-MEMORY CIRCUIT BREAKER FOR GEMINI
+// ─────────────────────────────────────────────────────────────
+let geminiCircuitBreakerUntil = 0;
+let geminiCircuitBreakerReason = null;
+
+function getGeminiCircuitBreakerState() {
+  const now = Date.now();
+  if (now < geminiCircuitBreakerUntil) {
+    return {
+      active: true,
+      remainingMs: geminiCircuitBreakerUntil - now,
+      reason: geminiCircuitBreakerReason
+    };
+  }
+  return { active: false, remainingMs: 0, reason: null };
+}
+
+function tripGeminiCircuitBreaker(durationMs, reason) {
+  geminiCircuitBreakerUntil = Date.now() + Math.max(1000, durationMs);
+  geminiCircuitBreakerReason = reason;
+  console.warn(`⚡ Gemini Circuit Breaker TRIPPED for ${Math.round(durationMs / 1000)}s: ${reason}`);
+}
+
+function resetGeminiCircuitBreaker() {
+  geminiCircuitBreakerUntil = 0;
+  geminiCircuitBreakerReason = null;
+}
+
+/**
  * Robust wrapper around ai.models.generateContent with:
  * - Minimum spacing throttle between outbound calls
- * - Exponential backoff with jitter on HTTP 429 & 503
- * - Automatic fallback to FALLBACK_GEMINI_MODEL on repeated rate limit/busy errors
+ * - Immediate circuit-breaker tripping on Daily Quota (RPD) exhaustion (0 useless retries)
+ * - Single controlled backoff for transient short rate limits
+ * - No futile cross-model retry storms when project-level quota is exhausted
  */
-async function callGeminiWithBackoff(ai, primaryModel, contents, config, maxRetries = 3) {
+async function callGeminiWithBackoff(ai, primaryModel, contents, config, maxRetries = 1) {
+  // Check circuit breaker first
+  const cb = getGeminiCircuitBreakerState();
+  if (cb.active) {
+    const err = new Error(`Gemini circuit breaker active (${cb.reason}, remaining: ${Math.round(cb.remainingMs / 1000)}s)`);
+    err.status = 429;
+    err.circuitBreakerActive = true;
+    throw err;
+  }
+
   let attempt = 0;
   let currentModel = primaryModel;
 
@@ -291,19 +398,29 @@ async function callGeminiWithBackoff(ai, primaryModel, contents, config, maxRetr
       });
       return response;
     } catch (err) {
-      const isRateLimit = err.status === 429 || err.message?.includes('429') || err.message?.includes('RESOURCE_EXHAUSTED');
-      const isUnavailable = err.status === 503 || err.message?.includes('high demand') || err.message?.includes('UNAVAILABLE');
+      const parsed = parseGeminiError(err);
+
+      // If Daily Quota / long wait: TRIP CIRCUIT BREAKER & THROW IMMEDIATELY (0 retries!)
+      if (parsed.isDailyQuotaExhausted) {
+        const cooldownMs = (parsed.retryDelaySeconds ? parsed.retryDelaySeconds * 1000 : 3600 * 1000);
+        tripGeminiCircuitBreaker(cooldownMs, `Daily Quota Exhausted (${parsed.quotaId || 'RPD limit'})`);
+        throw err;
+      }
 
       attempt++;
       if (attempt > maxRetries) throw err;
 
-      if (isRateLimit || isUnavailable) {
-        const waitMs = Math.min(10000, 2000 * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 800));
-        console.warn(`⚠️ Gemini API ${err.status || 'Rate Limit'} on model ${currentModel} (attempt ${attempt}/${maxRetries}), backing off for ${waitMs}ms...`);
-        if (attempt >= 2 && currentModel !== FALLBACK_GEMINI_MODEL) {
-          console.warn(`⚠️ Switching to fallback model ${FALLBACK_GEMINI_MODEL}...`);
-          currentModel = FALLBACK_GEMINI_MODEL;
+      if (parsed.isRateLimit || parsed.isUnavailable) {
+        // If Retry-After is short (<= 5s), wait that exact duration once
+        if (parsed.retryDelaySeconds && parsed.retryDelaySeconds <= 5) {
+          const waitMs = parsed.retryDelaySeconds * 1000;
+          console.warn(`⚠️ Gemini API rate limit, waiting ${waitMs}ms as specified by Retry-After...`);
+          await sleep(waitMs);
+          continue;
         }
+        // Transient short backoff (1500ms max 1 retry)
+        const waitMs = 1500;
+        console.warn(`⚠️ Gemini API ${parsed.status || 'Rate Limit'} on model ${currentModel} (attempt ${attempt}/${maxRetries}), quick wait ${waitMs}ms...`);
         await sleep(waitMs);
       } else {
         throw err;
@@ -414,7 +531,24 @@ async function processAgentChatMessage(userMessage, options = {}) {
 
   // If Gemini provider not requested or no API key, use fallback immediately
   if (provider !== 'gemini' || !apiKey) {
-    return executeFallbackChat(userMessage, todayDate, nowDate, 'Local (Deterministic / Ollama)');
+    return executeFallbackChat(userMessage, todayDate, nowDate, {
+      sessionId: validatedSessionId,
+      messageId: clientRequestId,
+      db: activeDb,
+      badge: 'Local (Deterministic / Ollama)'
+    });
+  }
+
+  // Check circuit breaker first - fail over immediately with 0s latency
+  const cb = getGeminiCircuitBreakerState();
+  if (cb.active) {
+    console.log(`ℹ️ Gemini circuit breaker ACTIVE (${cb.reason}, remaining: ${Math.round(cb.remainingMs / 1000)}s) — routing directly to local fallback.`);
+    return executeFallbackChat(userMessage, todayDate, nowDate, {
+      sessionId: validatedSessionId,
+      messageId: clientRequestId,
+      db: activeDb,
+      badge: 'Local (Fallback: Rate Limited)'
+    });
   }
 
   // Set up Gemini SDK
@@ -423,7 +557,12 @@ async function processAgentChatMessage(userMessage, options = {}) {
     ai = new GoogleGenAI({ apiKey });
   } catch (initErr) {
     console.warn('⚠️ GoogleGenAI init failed, falling back to local:', initErr.message);
-    return executeFallbackChat(userMessage, todayDate, nowDate, 'Local (Fallback: Init Error)');
+    return executeFallbackChat(userMessage, todayDate, nowDate, {
+      sessionId: validatedSessionId,
+      messageId: clientRequestId,
+      db: activeDb,
+      badge: 'Local (Fallback: Init Error)'
+    });
   }
 
   const systemInstruction = buildSystemPrompt(todayStr, currentTimeStr, timezone);
@@ -549,23 +688,14 @@ async function processAgentChatMessage(userMessage, options = {}) {
     return finalResponseObj;
 
   } catch (geminiError) {
-    const isRateLimit = geminiError.status === 429 || geminiError.message?.includes('429') || geminiError.message?.includes('RESOURCE_EXHAUSTED');
-
-    if (isRateLimit && hasActionIntent(userMessage)) {
-      console.warn('⚠️ Gemini rate limited on actionable request; reporting temporary unavailability.');
-      return {
-        success: false,
-        reply: "Action processing is temporarily unavailable because the AI service is rate-limited. Your request was not saved. Please wait a moment and tap to retry.",
-        provider: 'Offline / Rate Limited',
-        badge: 'Rate Limited',
-        actions: [],
-        updated: [],
-        rate_limited: true
-      };
-    }
-
-    console.warn(`⚠️ Gemini call failed (${geminiError.status || geminiError.message}), invoking local fallback...`);
-    return executeFallbackChat(userMessage, todayDate, nowDate, `Local (Fallback: ${geminiError.status || 'Offline'})`);
+    const parsed = parseGeminiError(geminiError);
+    console.warn(`⚠️ Gemini call failed (${parsed.status || geminiError.message}), routing directly to local fallback...`);
+    return executeFallbackChat(userMessage, todayDate, nowDate, {
+      sessionId: validatedSessionId,
+      messageId: clientRequestId,
+      db: activeDb,
+      badge: parsed.isRateLimit ? 'Local (Fallback: Rate Limited)' : `Local (Fallback: ${geminiError.status || 'Offline'})`
+    });
   }
 }
 
@@ -573,50 +703,80 @@ async function processAgentChatMessage(userMessage, options = {}) {
  * Fallback execution path:
  * 1. Tries deterministic actionEngine / chatCommands.
  * 2. If no command matched, calls local Ollama for conversational reply.
+ * 3. Guarantees session-scoped idempotency storage for safe retries without duplicate mutations.
  */
-async function executeFallbackChat(userMessage, todayDate, nowDate, fallbackBadge = 'Local') {
+async function executeFallbackChat(userMessage, todayDate, nowDate, context = {}) {
+  const fallbackBadge = typeof context === 'string' ? context : (context.badge || 'Local');
+  const validatedSessionId = typeof context === 'object' && context.sessionId ? context.sessionId : 'sess_fallback';
+  const clientRequestId = typeof context === 'object' && context.messageId ? context.messageId : `msg_fb_${Date.now()}`;
+  const activeDb = typeof context === 'object' && context.db ? context.db : db;
+
   // 1. Try deterministic natural language action engine
-  const actionReply = processNaturalLanguageAction(userMessage, todayDate, nowDate);
+  let actionReply = null;
+  try {
+    actionReply = processNaturalLanguageAction(userMessage, todayDate, nowDate);
+  } catch (aeErr) {
+    console.warn('⚠️ processNaturalLanguageAction error:', aeErr.message);
+  }
+
   if (actionReply !== null) {
-    return {
+    const responseObj = {
       success: true,
       reply: actionReply,
       provider: 'Local (Deterministic)',
       badge: fallbackBadge,
+      actions: [{ tool: 'natural_language_action', args: { message: userMessage }, result: { success: true, message: actionReply } }],
       updated: ['Day Plan', 'Goals']
     };
+    storeCompletedRequest(validatedSessionId, clientRequestId, responseObj, activeDb);
+    return responseObj;
   }
 
   // 2. Try deterministic chat commands
-  const cmdReply = routeCommand(userMessage, todayDate, nowDate);
+  let cmdReply = null;
+  try {
+    cmdReply = routeCommand(userMessage, todayDate, nowDate);
+  } catch (cmdErr) {
+    console.warn('⚠️ routeCommand error:', cmdErr.message);
+  }
+
   if (cmdReply !== null) {
-    return {
+    const responseObj = {
       success: true,
       reply: cmdReply,
       provider: 'Local (Command Router)',
       badge: fallbackBadge,
+      actions: [{ tool: 'chat_command', args: { message: userMessage }, result: { success: true, message: cmdReply } }],
       updated: ['Day Plan', 'Goals']
     };
+    storeCompletedRequest(validatedSessionId, clientRequestId, responseObj, activeDb);
+    return responseObj;
   }
 
   // 3. Fall through to Ollama
   try {
     const aiReply = await chatWithSeva(userMessage);
-    return {
+    const responseObj = {
       success: true,
       reply: aiReply,
       provider: 'Local (Ollama)',
       badge: fallbackBadge,
+      actions: [],
       updated: []
     };
+    storeCompletedRequest(validatedSessionId, clientRequestId, responseObj, activeDb);
+    return responseObj;
   } catch (ollamaErr) {
-    return {
+    const responseObj = {
       success: true,
-      reply: "Actions are unavailable right now and I'm currently running in offline mode. Please try again shortly.",
+      reply: "I'm currently running in offline mode. What would you like to plan or log?",
       provider: 'Offline',
       badge: 'Offline',
+      actions: [],
       updated: []
     };
+    storeCompletedRequest(validatedSessionId, clientRequestId, responseObj, activeDb);
+    return responseObj;
   }
 }
 
@@ -628,6 +788,12 @@ function resetMemoryCachesForTesting() {
 module.exports = {
   processAgentChatMessage,
   executeToolCall,
+  executeFallbackChat,
+  callGeminiWithBackoff,
+  parseGeminiError,
+  getGeminiCircuitBreakerState,
+  tripGeminiCircuitBreaker,
+  resetGeminiCircuitBreaker,
   validateSessionId,
   getNormalizedIdempotencyKey,
   checkIdempotency,
