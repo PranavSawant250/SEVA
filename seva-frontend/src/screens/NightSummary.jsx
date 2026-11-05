@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import client from '../api/client';
 import { getPriorityBadgeClass } from '../utils/themeUtils';
+import { useDataSync, emitDataMutated } from '../utils/syncEvents';
 
 function getTodayDate() {
   const d = new Date();
@@ -54,6 +55,10 @@ export default function NightSummary() {
     }
   }, []);
 
+  useDataSync(['tasks', 'plan', 'goals'], () => {
+    fetchSummaries();
+  });
+
   useEffect(() => {
     fetchSummaries();
   }, [fetchSummaries]);
@@ -65,6 +70,7 @@ export default function NightSummary() {
       const res = await client.get('/summary/generate');
       if (res.data.success && res.data.summary) {
         // Re-fetch history so the new summary is included in the dropdown
+        emitDataMutated(['tasks', 'plan', 'goals']);
         await fetchSummaries();
       } else {
         setErrorMsg(res.data.error || 'Summary generation returned no data.');

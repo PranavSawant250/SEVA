@@ -9,16 +9,25 @@ import {
   AlertCircle, 
   Zap, 
   CheckSquare,
-  Sliders,
   Info,
   AlertTriangle
 } from 'lucide-react';
 import client from '../api/client';
 import AddTaskModal from '../components/AddTaskModal';
 import { getPriorityBadgeClass } from '../utils/themeUtils';
+import { useDataSync, emitDataMutated } from '../utils/syncEvents';
 
 function getLocalTodayStr() {
   const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function getLocalTomorrowStr() {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
@@ -29,6 +38,9 @@ export default function DayPlan() {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
   
+  // Date Selection State
+  const [selectedDate, setSelectedDate] = useState(getLocalTodayStr());
+
   // Data States
   const [planItems, setPlanItems] = useState([]);
   const [tasks, setTasks] = useState([]);
@@ -39,6 +51,7 @@ export default function DayPlan() {
   const [shrunkItems, setShrunkItems] = useState([]);
   const [floorSessions, setFloorSessions] = useState([]);
   const [warnings, setWarnings] = useState([]);
+  const [showAllWarnings, setShowAllWarnings] = useState(false);
   const [planNote, setPlanNote] = useState('');
 
   // Window States
@@ -57,13 +70,16 @@ export default function DayPlan() {
   const [replanMsg, setReplanMsg] = useState('');
 
   // Fetch Day Plan, Real Tasks & Window Settings
-  const fetchPlanAndTasks = useCallback(async () => {
+  const fetchPlanAndTasks = useCallback(async (targetDateOverride) => {
     setErrorMsg('');
+    const targetDate = targetDateOverride || selectedDate;
     try {
       const [tasksRes, planRes, winRes] = await Promise.all([
-        client.get('/tasks'),
-        client.get('/plan/today'),
-        client.get('/settings/today').catch(() => ({ data: null }))
+        client.get(`/tasks?date=${targetDate}`),
+        client.get(`/plan?date=${targetDate}`),
+        targetDate === getLocalTodayStr()
+          ? client.get('/settings/today').catch(() => ({ data: null }))
+          : Promise.resolve({ data: null })
       ]);
 
       const realTasks = tasksRes.data.tasks || [];
@@ -78,23 +94,46 @@ export default function DayPlan() {
         }
       }
 
-      if (planRes.data.success && Array.isArray(planRes.data.plan) && planRes.data.plan.length > 0) {
-        setHasPlan(true);
-        setPlanItems(planRes.data.plan);
-        if (planRes.data.date) {
-          setTodayDate(planRes.data.date);
-        }
-      } else {
-        setHasPlan(false);
-        setPlanItems([]);
+      const plan = (planRes.data && planRes.data.success && Array.isArray(planRes.data.plan))
+        ? planRes.data.plan
+        : [];
+
+      setHasPlan(plan.length > 0);
+      setPlanItems(plan);
+      if (planRes.data && planRes.data.date) {
+        setTodayDate(planRes.data.date);
       }
+
+      // Reconcile Not Scheduled Today (Anytime/flexible tasks not in timed timeline + backend deferred items)
+      const scheduledIds = new Set(plan.map(p => p.task_id).filter(Boolean));
+      const scheduledNames = new Set(plan.map(p => (p.task || '').toLowerCase().trim()).filter(Boolean));
+
+      const unscheduledTodayTasks = realTasks
+        .filter(t => 
+          !scheduledIds.has(t.id) && 
+          !scheduledNames.has((t.name || '').toLowerCase().trim()) && 
+          Number(t.completed) === 0
+        )
+        .map(t => ({
+          item: t.name,
+          reason: t.time_slot && t.time_slot !== 'Anytime' ? t.time_slot : 'Anytime (flexible)',
+          task_id: t.id
+        }));
+
+      const backendDeferred = Array.isArray(planRes.data && planRes.data.deferred) ? planRes.data.deferred : [];
+      setDeferredItems([...unscheduledTodayTasks, ...backendDeferred]);
     } catch (err) {
       console.error('[SEVA] Day plan fetch error:', err);
       setErrorMsg('Unable to fetch your day plan from backend server.');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [selectedDate]);
+
+  // Global Cross-Screen Sync
+  useDataSync(['tasks', 'plan'], () => {
+    fetchPlanAndTasks();
+  });
 
   useEffect(() => {
     fetchPlanAndTasks();
@@ -187,6 +226,7 @@ export default function DayPlan() {
 
     try {
       await client.patch(`/tasks/${matchedTask.id}/complete`, { completed: newCompletedStatus });
+      emitDataMutated(['tasks', 'plan', 'goals']);
       await fetchPlanAndTasks();
     } catch (err) {
       console.error('[SEVA] Toggle completion error:', err);
@@ -208,6 +248,7 @@ export default function DayPlan() {
     setPlanNote(data.plan_note || '');
     setNeedsWindow(false);
     setWindowPromptMsg('');
+    emitDataMutated(['plan', 'tasks', 'goals']);
     await fetchPlanAndTasks();
   };
 
@@ -355,7 +396,39 @@ export default function DayPlan() {
           </div>
           <div>
             <h1 className="font-heading font-bold text-3xl text-text-primary">Day Plan Timeline</h1>
-            <p className="text-text-secondary text-sm mt-0.5">Deterministic goal-aware schedule for today</p>
+            <div className="flex items-center gap-2 mt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  const td = getLocalTodayStr();
+                  setSelectedDate(td);
+                  fetchPlanAndTasks(td);
+                }}
+                className={`px-2.5 py-0.5 text-xs rounded-lg font-medium transition-all cursor-pointer ${
+                  selectedDate === getLocalTodayStr()
+                    ? 'bg-accent text-dark-bg font-semibold'
+                    : 'bg-card-bg text-text-secondary hover:text-text-primary border border-muted'
+                }`}
+              >
+                Today
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const tm = getLocalTomorrowStr();
+                  setSelectedDate(tm);
+                  fetchPlanAndTasks(tm);
+                }}
+                className={`px-2.5 py-0.5 text-xs rounded-lg font-medium transition-all cursor-pointer ${
+                  selectedDate === getLocalTomorrowStr()
+                    ? 'bg-accent text-dark-bg font-semibold'
+                    : 'bg-card-bg text-text-secondary hover:text-text-primary border border-muted'
+                }`}
+              >
+                Tomorrow
+              </button>
+              <span className="text-text-muted text-xs font-mono ml-1">({selectedDate})</span>
+            </div>
           </div>
         </div>
 
@@ -380,86 +453,6 @@ export default function DayPlan() {
         </div>
       </div>
 
-      {/* ── Today's Window Control / Window Not Set Prompt ── */}
-      <div className={`rounded-2xl p-5 border space-y-3 ${
-        needsWindow
-          ? 'bg-amber-950/30 border-amber-500/50'
-          : 'bg-card-bg border-muted'
-      }`}>
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div className="flex items-center gap-2 text-sm font-semibold text-text-primary">
-            <Sliders size={18} className={needsWindow ? 'text-amber-400' : 'text-accent'} />
-            <span>
-              {needsWindow
-                ? 'Daily Window Not Set'
-                : windowState?.done_for_day
-                  ? 'Marked as Done for Today'
-                  : `Today's Window: until ${windowState?.window_end_time || 'set time'}`}
-            </span>
-          </div>
-          {windowState?.window_set && !windowState?.done_for_day && (
-            <span className="text-xs font-mono text-accent">
-              {windowState.remaining_minutes} min remaining ({windowState.source})
-            </span>
-          )}
-        </div>
-
-        {(needsWindow || windowPromptMsg) && (
-          <p className="text-sm text-amber-300">
-            {windowPromptMsg || 'Tell SEVA when your free window ends today (e.g. "9:00 PM" or "4 hours") so your schedule can be built without assuming a bedtime.'}
-            {windowHint ? ` ${windowHint}` : ''}
-          </p>
-        )}
-
-        <form onSubmit={handleQuickWindowSubmit} className="flex flex-wrap items-center gap-2">
-          <input
-            type="text"
-            placeholder='e.g. "9:00 PM" or "4 hours" or "90 minutes"'
-            value={windowInput}
-            onChange={(e) => setWindowInput(e.target.value)}
-            className="flex-1 min-w-[200px] bg-navy border border-muted rounded-xl px-3.5 py-2 text-sm text-text-primary focus:outline-none focus:border-accent"
-          />
-          <button
-            type="submit"
-            disabled={savingWindow || !windowInput.trim()}
-            className="px-4 py-2 bg-accent hover:bg-accent/90 text-dark-bg font-heading font-semibold text-sm rounded-xl transition-all cursor-pointer disabled:opacity-50"
-          >
-            {savingWindow ? 'Saving...' : 'Set Window & Plan'}
-          </button>
-          <button
-            type="button"
-            disabled={savingWindow}
-            onClick={() => handleSetWindow({ available_minutes: 120, done_for_day: false })}
-            className="px-3 py-2 bg-navy hover:bg-panelLight text-text-secondary hover:text-text-primary border border-muted rounded-xl text-sm cursor-pointer"
-          >
-            +2h
-          </button>
-          <button
-            type="button"
-            disabled={savingWindow}
-            onClick={() => handleSetWindow({ available_minutes: 240, done_for_day: false })}
-            className="px-3 py-2 bg-navy hover:bg-panelLight text-text-secondary hover:text-text-primary border border-muted rounded-xl text-sm cursor-pointer"
-          >
-            +4h
-          </button>
-          <button
-            type="button"
-            disabled={savingWindow}
-            onClick={() => handleSetWindow({ window_end_time: '9:00 PM', done_for_day: false })}
-            className="px-3 py-2 bg-navy hover:bg-panelLight text-text-secondary hover:text-text-primary border border-muted rounded-xl text-sm cursor-pointer"
-          >
-            Till 9 PM
-          </button>
-          <button
-            type="button"
-            disabled={savingWindow}
-            onClick={() => handleSetWindow({ done_for_day: true })}
-            className="px-3 py-2 bg-rose-950/40 hover:bg-rose-900/40 text-rose-300 border border-rose-500/30 rounded-xl text-sm cursor-pointer"
-          >
-            Done for today
-          </button>
-        </form>
-      </div>
 
       {/* ── ERROR ALERT ── */}
       {errorMsg && (
@@ -493,10 +486,25 @@ export default function DayPlan() {
       )}
 
       {warnings.length > 0 && (
-        <div className="p-4 bg-amber-950/30 border border-amber-500/40 rounded-2xl space-y-1.5 text-sm text-amber-300">
-          {warnings.map((w, i) => (
+        <div className="p-4 bg-amber-950/30 border border-amber-500/40 rounded-2xl space-y-2 text-sm text-amber-300">
+          <div className="flex items-center justify-between pb-1.5 border-b border-amber-500/20 font-medium">
+            <span className="flex items-center gap-1.5 text-amber-400 font-semibold">
+              <AlertTriangle size={16} />
+              Schedule Notices ({warnings.length})
+            </span>
+            {warnings.length > 2 && (
+              <button
+                type="button"
+                onClick={() => setShowAllWarnings(!showAllWarnings)}
+                className="text-xs text-amber-300 hover:text-amber-100 underline transition-colors"
+              >
+                {showAllWarnings ? 'Show less' : `View all (${warnings.length})`}
+              </button>
+            )}
+          </div>
+          {(showAllWarnings ? warnings : warnings.slice(0, 2)).map((w, i) => (
             <div key={i} className="flex items-start gap-2">
-              <AlertTriangle size={16} className="shrink-0 mt-0.5 text-amber-400" />
+              <span className="text-amber-400 shrink-0">•</span>
               <span>{w}</span>
             </div>
           ))}
@@ -669,15 +677,41 @@ export default function DayPlan() {
             </span>
           </div>
           <div className="space-y-2">
-            {deferredItems.map((d, idx) => (
-              <div
-                key={idx}
-                className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 p-3 rounded-xl bg-dark-bg/70 border border-gray-800/80 text-xs"
-              >
-                <span className="font-semibold text-text-primary">{d.item}</span>
-                <span className="text-text-secondary font-mono text-[11px]">{d.reason}</span>
-              </div>
-            ))}
+            {deferredItems.map((d, idx) => {
+              const matchedTask = d.task_id ? tasks.find(t => Number(t.id) === Number(d.task_id)) : null;
+              const isCompleted = Boolean(matchedTask && Number(matchedTask.completed) === 1);
+              return (
+                <div
+                  key={idx}
+                  className={`flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 p-3 rounded-xl border text-xs transition-all ${
+                    isCompleted
+                      ? 'bg-navy/40 border-gray-800/60 opacity-60'
+                      : 'bg-dark-bg/70 border-gray-800/80'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    {d.task_id && (
+                      <button
+                        type="button"
+                        onClick={() => handleToggleComplete({ task_id: d.task_id, task: d.item })}
+                        title={isCompleted ? 'Mark incomplete' : 'Mark complete'}
+                        className="cursor-pointer text-accent hover:text-accent/80 shrink-0"
+                      >
+                        {isCompleted ? (
+                          <CheckCircle2 size={16} className="text-emerald-400 fill-emerald-500/20" />
+                        ) : (
+                          <Circle size={16} />
+                        )}
+                      </button>
+                    )}
+                    <span className={`font-semibold text-text-primary ${isCompleted ? 'line-through text-text-muted' : ''}`}>
+                      {d.item}
+                    </span>
+                  </div>
+                  <span className="text-text-secondary font-mono text-[11px] shrink-0">{d.reason}</span>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

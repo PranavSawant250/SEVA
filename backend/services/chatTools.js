@@ -11,10 +11,22 @@
 
 const db = require('../database/db');
 const { getTodayDate, getTomorrowDate, parseTimeToMinutes, minutesToTimeString } = require('../utils/dateUtils');
-const { getAllGoals, computeGoalProgress } = require('./goalsService');
+const {
+  getAllGoals,
+  getGoalById,
+  createGoal,
+  updateGoal,
+  manageGoalSteps,
+  logGoalProgress,
+  correctGoalProgress,
+  updateGoalStatus,
+  deleteGoal,
+  computeGoalProgress,
+  findMatchingGoal
+} = require('./goalsService');
 const { replan } = require('./plannerService');
-const { findMatchingGoal } = require('./actionEngine');
 const { getPendingState, setPendingState, clearPending } = require('./chatCommands');
+const TaskService = require('./taskService');
 
 // ─────────────────────────────────────────────────────────────
 // DATE RESOLUTION HELPER (Injected today)
@@ -110,7 +122,7 @@ const TOOLS = [
         sql += ' AND completed = ?';
         params.push(args.completed ? 1 : 0);
       }
-      sql += ' ORDER BY CASE priority WHEN "high" THEN 1 WHEN "medium" THEN 2 ELSE 3 END, id ASC';
+      sql += " ORDER BY CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, id ASC";
       const rows = db.prepare(sql).all(...params);
       return {
         success: true,
@@ -130,41 +142,408 @@ const TOOLS = [
 
   {
     name: 'get_goals',
-    description: 'Retrieve all active goals with current progress, target, expected progress, behind-by percentage, and milestone steps. Read-only.',
+    description: 'Retrieve goals with current progress, targets, deadlines, pace, and step checklists. Filter by status ("active", "paused", "completed", "overdue", "all"), category, or priority. Read-only.',
     parameters: {
       type: 'OBJECT',
       properties: {
+        status: {
+          type: 'STRING',
+          description: 'Filter by goal status: "active", "paused", "completed", "overdue", or "all". Defaults to visible goals.'
+        },
         category: {
           type: 'STRING',
-          description: 'Optional category filter (e.g. Technical, DSA, College).'
+          description: 'Optional category filter (e.g. Technical, DSA, College, Fitness).'
+        },
+        priority: {
+          type: 'STRING',
+          description: 'Optional priority filter: "high", "medium", or "low".'
+        },
+        limit: {
+          type: 'INTEGER',
+          description: 'Maximum number of goals to return.'
         }
       }
     },
     handler: async (args, context) => {
-      const goals = getAllGoals(context.todayDate);
-      let filtered = goals.filter(g => g.status === 'active');
-      if (args.category) {
-        const cat = args.category.toLowerCase().trim();
-        filtered = filtered.filter(g => (g.category || '').toLowerCase().includes(cat));
-      }
+      const todayDate = context.todayDate || new Date();
+      const activeDb = context.db || db;
+      const goals = getAllGoals(todayDate, {
+        status: args.status,
+        category: args.category,
+        priority: args.priority,
+        limit: args.limit
+      }, activeDb);
+
       return {
         success: true,
-        count: filtered.length,
-        goals: filtered.map(g => ({
+        count: goals.length,
+        filter_status: args.status || 'visible',
+        goals: goals.map(g => ({
           id: g.id,
           title: g.title,
           category: g.category,
           priority: g.priority,
           goal_type: g.goal_type,
+          status: g.display_status || g.status,
+          is_paused: Boolean(g.is_paused),
           progress: g.progress,
-          expected_progress: g.expected_progress,
-          behind_by: g.behind_by,
-          days_left: g.days_left,
+          target_text: g.target_text,
           current_count: g.current_count,
           target_count: g.target_count,
+          per_week: g.per_week,
+          deadline: g.deadline,
+          days_left: g.days_left,
+          is_overdue: g.is_overdue,
+          expected_progress: g.expected_progress,
+          behind_by: g.behind_by,
           steps: (g.steps || []).map(s => ({ id: s.id, text: s.step_text, done: Boolean(s.done) }))
         }))
       };
+    }
+  },
+
+  {
+    name: 'get_goal_details',
+    description: 'Retrieve detailed information for a specific goal including step checklists, recent progress log entries, remaining target, and pace metrics. Read-only.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        goal_identifier: {
+          type: 'STRING',
+          description: 'Goal title, keyword, or numeric goal ID.'
+        }
+      },
+      required: ['goal_identifier']
+    },
+    handler: async (args, context) => {
+      const activeDb = context.db || db;
+      const q = (args.goal_identifier || '').trim();
+      const { match: goal, ambiguous, candidates } = findMatchingGoal(q, null, activeDb);
+
+      if (ambiguous) {
+        return {
+          success: false,
+          ambiguous: true,
+          error: `Multiple goals match "${q}": ${candidates.map(c => `"${c.title}"`).join(', ')}. Please specify which one you want.`
+        };
+      }
+      if (!goal) {
+        return { success: false, error: `Could not find any goal matching "${q}".` };
+      }
+
+      const todayDate = context.todayDate || new Date();
+      const details = getGoalById(goal.id, todayDate, activeDb);
+      if (!details) return { success: false, error: 'Failed to load goal details.' };
+
+      return {
+        success: true,
+        goal: {
+          id: details.id,
+          title: details.title,
+          category: details.category,
+          priority: details.priority,
+          goal_type: details.goal_type,
+          status: details.display_status || details.status,
+          is_paused: Boolean(details.is_paused),
+          paused_at: details.paused_at,
+          total_paused_days: details.total_paused_days || 0,
+          progress: details.progress,
+          current_count: details.current_count,
+          target_count: details.target_count,
+          per_week: details.per_week,
+          target_text: details.target_text,
+          deadline: details.deadline,
+          days_left: details.days_left,
+          is_overdue: details.is_overdue,
+          expected_progress: details.expected_progress,
+          behind_by: details.behind_by,
+          steps: (details.steps || []).map(s => ({ id: s.id, text: s.step_text, done: Boolean(s.done) })),
+          recent_logs: (details.recent_logs || []).map(l => ({
+            id: l.id,
+            date: l.date,
+            amount: l.amount,
+            note: l.note
+          }))
+        }
+      };
+    }
+  },
+
+  {
+    name: 'create_goal',
+    description: 'Create a new personal goal with optional target count/frequency, category, priority, deadline, and initial milestone steps.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        title: {
+          type: 'STRING',
+          description: 'Title or name of the goal (e.g. "Solve 320 LeetCode problems", "Learn German A2").'
+        },
+        target: {
+          type: 'STRING',
+          description: 'Target text, count, or frequency (e.g. "320 problems", "5 days/week", "100 km", "A2 level").'
+        },
+        category: {
+          type: 'STRING',
+          description: 'Category name (e.g. "Technical", "Fitness", "Academics", "Language"). Defaults to "General".'
+        },
+        priority: {
+          type: 'STRING',
+          description: 'Priority: "high", "medium", or "low". Defaults to "medium".'
+        },
+        deadline: {
+          type: 'STRING',
+          description: 'Target completion date in YYYY-MM-DD format.'
+        },
+        goal_type: {
+          type: 'STRING',
+          description: 'Optional type: "count" (problems/units), "frequency" (times per week), or "milestone" (checklist).'
+        },
+        steps: {
+          type: 'ARRAY',
+          items: { type: 'STRING' },
+          description: 'Optional initial list of milestone step names.'
+        }
+      },
+      required: ['title']
+    },
+    handler: async (args, context) => {
+      const activeDb = context.db || db;
+      const todayStr = getTodayDate(context.todayDate);
+
+      try {
+        const goal = createGoal({
+          title: args.title,
+          target: args.target,
+          category: args.category,
+          priority: args.priority,
+          deadline: args.deadline,
+          goal_type: args.goal_type,
+          steps: args.steps
+        }, todayStr, activeDb);
+
+        return {
+          success: true,
+          message: `Created goal "${goal.title}" (${goal.priority} priority${goal.deadline ? `, due ${goal.deadline}` : ''}).`,
+          goal_id: goal.id,
+          title: goal.title,
+          category: goal.category,
+          priority: goal.priority,
+          goal_type: goal.goal_type,
+          deadline: goal.deadline,
+          steps_count: (goal.steps || []).length,
+          updated: ['Goals', 'Dashboard']
+        };
+      } catch (err) {
+        return { success: false, error: err.error || err.message };
+      }
+    }
+  },
+
+  {
+    name: 'update_goal',
+    description: 'Update metadata for an existing goal (title, target, deadline, priority, category) while strictly preserving existing progress and history.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        goal_identifier: {
+          type: 'STRING',
+          description: 'Title, keyword, or ID of the goal to update.'
+        },
+        title: {
+          type: 'STRING',
+          description: 'New title/name for the goal.'
+        },
+        target: {
+          type: 'STRING',
+          description: 'New target text or number (e.g. "400 problems", "4 days/week").'
+        },
+        deadline: {
+          type: 'STRING',
+          description: 'New deadline in YYYY-MM-DD format.'
+        },
+        priority: {
+          type: 'STRING',
+          description: 'New priority: "high", "medium", or "low".'
+        },
+        category: {
+          type: 'STRING',
+          description: 'New category name.'
+        }
+      },
+      required: ['goal_identifier']
+    },
+    handler: async (args, context) => {
+      const activeDb = context.db || db;
+      const q = (args.goal_identifier || '').trim();
+      const { match: goal, ambiguous, candidates } = findMatchingGoal(q, null, activeDb);
+
+      if (ambiguous) {
+        return {
+          success: false,
+          ambiguous: true,
+          error: `Multiple goals match "${q}": ${candidates.map(c => `"${c.title}"`).join(', ')}. Which one do you want to update?`
+        };
+      }
+      if (!goal) {
+        return { success: false, error: `Could not find any goal matching "${q}".` };
+      }
+
+      try {
+        const res = updateGoal(goal.id, {
+          title: args.title,
+          target: args.target,
+          deadline: args.deadline,
+          priority: args.priority,
+          category: args.category
+        }, activeDb);
+
+        return {
+          success: true,
+          goal_id: goal.id,
+          message: `Updated goal "${res.goal.title}".`,
+          updated_fields: res.updated_fields || [],
+          goal: {
+            id: res.goal.id,
+            title: res.goal.title,
+            priority: res.goal.priority,
+            deadline: res.goal.deadline,
+            target_text: res.goal.target_text,
+            current_count: res.goal.current_count
+          },
+          updated: ['Goals', 'Dashboard']
+        };
+      } catch (err) {
+        return { success: false, error: err.error || err.message };
+      }
+    }
+  },
+
+  {
+    name: 'manage_goal_steps',
+    description: 'Add, rename, delete (soft-delete), toggle completion, or list steps under a milestone goal.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        goal_identifier: {
+          type: 'STRING',
+          description: 'Goal title, keyword, or ID.'
+        },
+        action: {
+          type: 'STRING',
+          description: 'Action to perform: "add", "rename", "delete", "toggle", or "list".'
+        },
+        step_text: {
+          type: 'STRING',
+          description: 'Step name to add, new text for rename, or text of step to delete/toggle.'
+        },
+        step_id: {
+          type: 'INTEGER',
+          description: 'Numeric ID of the step to rename, delete, or toggle.'
+        },
+        steps: {
+          type: 'ARRAY',
+          items: { type: 'STRING' },
+          description: 'List of step names to add simultaneously.'
+        },
+        done: {
+          type: 'BOOLEAN',
+          description: 'Completion status when toggling (true = complete, false = incomplete).'
+        }
+      },
+      required: ['goal_identifier', 'action']
+    },
+    handler: async (args, context) => {
+      const activeDb = context.db || db;
+      const q = (args.goal_identifier || '').trim();
+      const { match: goal, ambiguous, candidates } = findMatchingGoal(q, null, activeDb);
+
+      if (ambiguous) {
+        return {
+          success: false,
+          ambiguous: true,
+          error: `Multiple goals match "${q}": ${candidates.map(c => `"${c.title}"`).join(', ')}. Please specify which goal you mean.`
+        };
+      }
+      if (!goal) {
+        return { success: false, error: `Could not find any goal matching "${q}".` };
+      }
+
+      try {
+        const res = manageGoalSteps(goal.id, args.action, {
+          step_text: args.step_text,
+          step_id: args.step_id,
+          steps: args.steps,
+          done: args.done
+        }, activeDb);
+
+        return {
+          ...res,
+          updated: ['Goals', 'Dashboard']
+        };
+      } catch (err) {
+        return { success: false, error: err.error || err.message };
+      }
+    }
+  },
+
+  {
+    name: 'update_goal_status',
+    description: 'Manage goal lifecycle: pause an active goal, resume a paused goal, mark complete, reopen a completed goal, or restore a previously removed goal.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        goal_identifier: {
+          type: 'STRING',
+          description: 'Title, keyword, or ID of the goal.'
+        },
+        action: {
+          type: 'STRING',
+          description: 'Status action to perform: "pause", "resume", "complete", "reopen", or "restore".'
+        },
+        extend_deadline: {
+          type: 'BOOLEAN',
+          description: 'When resuming, whether to extend the deadline by the paused duration (default true).'
+        }
+      },
+      required: ['goal_identifier', 'action']
+    },
+    handler: async (args, context) => {
+      const activeDb = context.db || db;
+      const q = (args.goal_identifier || '').trim();
+      const act = (args.action || '').toLowerCase().trim();
+
+      const pool = act === 'restore'
+        ? activeDb.prepare("SELECT * FROM goals WHERE status = 'removed'").all()
+        : activeDb.prepare("SELECT * FROM goals WHERE status != 'removed'").all();
+
+      const { match: goal, ambiguous, candidates } = findMatchingGoal(q, pool, activeDb);
+
+      if (ambiguous) {
+        return {
+          success: false,
+          ambiguous: true,
+          error: `Multiple goals match "${q}": ${candidates.map(c => `"${c.title}"`).join(', ')}. Which one do you mean?`
+        };
+      }
+      if (!goal) {
+        return { success: false, error: `Could not find any ${act === 'restore' ? 'removed ' : ''}goal matching "${q}".` };
+      }
+
+      const todayStr = getTodayDate(context.todayDate);
+
+      try {
+        const res = updateGoalStatus(goal.id, act, {
+          extend_deadline: args.extend_deadline !== false
+        }, todayStr, activeDb);
+
+        return {
+          ...res,
+          updated: ['Goals', 'Dashboard', 'Night Summary']
+        };
+      } catch (err) {
+        return { success: false, error: err.error || err.message };
+      }
     }
   },
 
@@ -215,7 +594,8 @@ const TOOLS = [
       if (isNaN(duration) || duration < 15) duration = 30;
       if (duration > 480) duration = 480;
 
-      const targetDate = resolveTargetDate(args.date, context.todayDate);
+      const isBacklog = args.date && (String(args.date).toLowerCase() === 'backlog' || String(args.date).toLowerCase() === 'unscheduled');
+      const targetDate = isBacklog ? null : resolveTargetDate(args.date, context.todayDate);
 
       let formattedTime = null;
       if (args.time_slot) {
@@ -230,45 +610,48 @@ const TOOLS = [
         if (match) linkedGoalId = match.id;
       }
 
-      // Insert task deterministically
-      const res = db.prepare(`
-        INSERT INTO tasks (name, priority, source, completed, date, duration_min, time_slot, goal_id)
-        VALUES (?, ?, 'chat', 0, ?, ?, ?, ?)
-      `).run(name, priority, targetDate, duration, formattedTime, linkedGoalId);
-
-      const taskId = res.lastInsertRowid;
-
-      // Sync Day Plan if target date matches today
-      const todayStr = getTodayDate(context.todayDate);
-      if (targetDate === todayStr) {
-        const planRow = db.prepare('SELECT id, plan_json FROM day_plans WHERE date = ?').get(todayStr);
-        if (planRow && planRow.plan_json) {
-          try {
-            const plan = JSON.parse(planRow.plan_json);
-            plan.push({
-              task_id: taskId,
-              task: name,
-              priority,
-              duration,
-              time: formattedTime || 'flexible',
-              completed: 0,
-              source: 'chat'
-            });
-            db.prepare('UPDATE day_plans SET plan_json = ? WHERE id = ?').run(JSON.stringify(plan), planRow.id);
-          } catch (_) {}
+      // Check conflict with effective timetable if fixed time provided
+      if (formattedTime && targetDate) {
+        const targetMins = parseTimeToMinutes(formattedTime);
+        const taskEnd = targetMins + duration;
+        const availabilityService = require('./availabilityService');
+        const eff = availabilityService.getEffectiveTimetableForDate(targetDate, context.db || db);
+        for (const block of eff.classes) {
+          const bStart = parseTimeToMinutes(block.start_time);
+          const bEnd = parseTimeToMinutes(block.end_time);
+          if (bStart !== null && bEnd !== null) {
+            if (Math.max(targetMins, bStart) < Math.min(taskEnd, bEnd)) {
+              return {
+                success: false,
+                error: `Cannot schedule "${name}" at ${formattedTime}: conflicts with ${block.subject} (${block.start_time} - ${block.end_time}).`
+              };
+            }
+          }
         }
       }
 
-      return {
-        success: true,
-        message: `Task "${name}" added for ${targetDate}${formattedTime ? ` at ${formattedTime}` : ''} (${priority} priority, ${duration} min).`,
-        task_id: taskId,
+      // Insert task via centralized TaskService
+      const createdTask = TaskService.createTask({
         name,
-        date: targetDate,
         priority,
         duration_min: duration,
+        date: targetDate,
         time_slot: formattedTime,
-        updated: ['Day Plan']
+        fixed_start: formattedTime,
+        goal_id: linkedGoalId,
+        source: 'chat'
+      }, context.db || db);
+
+      return {
+        success: true,
+        message: `Task "${createdTask.name}" added for ${createdTask.date || 'backlog'}${createdTask.time_slot && createdTask.time_slot !== 'Anytime' ? ` at ${createdTask.time_slot}` : ''} (${createdTask.priority} priority, ${createdTask.duration_min} min).`,
+        task_id: createdTask.id,
+        name: createdTask.name,
+        date: createdTask.date,
+        priority: createdTask.priority,
+        duration_min: createdTask.duration_min,
+        time_slot: createdTask.time_slot,
+        updated: ['Day Plan', 'Dashboard']
       };
     }
   },
@@ -303,6 +686,7 @@ const TOOLS = [
       required: ['task_identifier']
     },
     handler: async (args, context) => {
+      const activeDb = context.db || db;
       const q = (args.task_identifier || '').trim();
       if (!q) return { success: false, error: 'Task identifier is required.' };
 
@@ -310,12 +694,12 @@ const TOOLS = [
       // Find candidate tasks
       let matchedTask = null;
       if (/^\d+$/.test(q)) {
-        matchedTask = db.prepare('SELECT * FROM tasks WHERE id = ?').get(parseInt(q, 10));
+        matchedTask = activeDb.prepare('SELECT * FROM tasks WHERE id = ?').get(parseInt(q, 10));
       }
       if (!matchedTask) {
-        const candidates = db.prepare(`
+        const candidates = activeDb.prepare(`
           SELECT * FROM tasks
-          WHERE LOWER(name) LIKE ? AND completed = 0 AND date >= ?
+          WHERE LOWER(name) LIKE ? AND completed = 0 AND (date >= ? OR date IS NULL)
           ORDER BY date ASC, id ASC
         `).all(`%${q.toLowerCase()}%`, todayStr);
 
@@ -342,21 +726,24 @@ const TOOLS = [
         }
         formattedTime = minutesToTimeString(targetMins);
 
-        // Check timetable conflict
-        const taskDateObj = new Date(matchedTask.date + 'T00:00:00');
-        const weekday = taskDateObj.toLocaleDateString('en-US', { weekday: 'long' });
-        const timetableBlocks = db.prepare('SELECT subject, start_time, end_time FROM timetable WHERE day_of_week = ?').all(weekday);
-        const taskEnd = targetMins + (args.duration_min || matchedTask.duration_min || 30);
+        // Check timetable conflict against effective schedule for task date
+        const targetDay = args.date ? resolveTargetDate(args.date, context.todayDate) : matchedTask.date;
+        if (targetDay) {
+          const availabilityService = require('./availabilityService');
+          const eff = availabilityService.getEffectiveTimetableForDate(targetDay, activeDb);
+          const timetableBlocks = eff.classes || [];
+          const taskEnd = targetMins + (args.duration_min || matchedTask.duration_min || 30);
 
-        for (const block of timetableBlocks) {
-          const bStart = parseTimeToMinutes(block.start_time);
-          const bEnd = parseTimeToMinutes(block.end_time);
-          if (bStart !== null && bEnd !== null) {
-            if (Math.max(targetMins, bStart) < Math.min(taskEnd, bEnd)) {
-              return {
-                success: false,
-                error: `Cannot reschedule "${matchedTask.name}" to ${formattedTime}: conflicts with ${block.subject} (${block.start_time} - ${block.end_time}).`
-              };
+          for (const block of timetableBlocks) {
+            const bStart = parseTimeToMinutes(block.start_time);
+            const bEnd = parseTimeToMinutes(block.end_time);
+            if (bStart !== null && bEnd !== null) {
+              if (Math.max(targetMins, bStart) < Math.min(taskEnd, bEnd)) {
+                return {
+                  success: false,
+                  error: `Cannot reschedule "${matchedTask.name}" to ${formattedTime}: conflicts with ${block.subject} (${block.start_time} - ${block.end_time}).`
+                };
+              }
             }
           }
         }
@@ -377,34 +764,20 @@ const TOOLS = [
         targetDate = resolveTargetDate(args.date, context.todayDate);
       }
 
-      // Perform update
-      db.prepare(`
-        UPDATE tasks
-        SET time_slot = ?, priority = ?, duration_min = ?, date = ?
-        WHERE id = ?
-      `).run(formattedTime, priority, duration, targetDate, matchedTask.id);
-
-      // Sync Day Plan
-      const planRow = db.prepare('SELECT id, plan_json FROM day_plans WHERE date = ?').get(targetDate);
-      if (planRow && planRow.plan_json) {
-        try {
-          const plan = JSON.parse(planRow.plan_json);
-          for (const item of plan) {
-            if (item.task_id === matchedTask.id || (item.task && item.task.toLowerCase() === matchedTask.name.toLowerCase())) {
-              item.time = formattedTime;
-              item.priority = priority;
-              item.duration = duration;
-            }
-          }
-          db.prepare('UPDATE day_plans SET plan_json = ? WHERE id = ?').run(JSON.stringify(plan), planRow.id);
-        } catch (_) {}
-      }
+      // Perform update via TaskService
+      TaskService.updateTask(matchedTask.id, {
+        time_slot: formattedTime,
+        fixed_start: formattedTime,
+        priority,
+        duration_min: duration,
+        date: targetDate
+      }, context.db || db);
 
       return {
         success: true,
         message: `Updated "${matchedTask.name}" to ${formattedTime || 'flexible'} (${priority} priority).`,
         task_id: matchedTask.id,
-        updated: ['Day Plan']
+        updated: ['Day Plan', 'Dashboard']
       };
     }
   },
@@ -427,21 +800,62 @@ const TOOLS = [
       required: ['task_identifier']
     },
     handler: async (args, context) => {
+      const activeDb = context.db || db;
       const q = (args.task_identifier || '').trim();
       const targetDate = resolveTargetDate(args.date, context.todayDate);
 
       let matchedTask = null;
       if (/^\d+$/.test(q)) {
-        matchedTask = db.prepare('SELECT * FROM tasks WHERE id = ?').get(parseInt(q, 10));
+        matchedTask = activeDb.prepare('SELECT * FROM tasks WHERE id = ?').get(parseInt(q, 10));
       }
       if (!matchedTask) {
-        const candidates = db.prepare(`
+        const candidates = activeDb.prepare(`
           SELECT * FROM tasks
           WHERE LOWER(name) LIKE ? AND date = ?
         `).all(`%${q.toLowerCase()}%`, targetDate);
 
         if (candidates.length === 0) {
-          return { success: false, error: `No tasks found matching "${q}" for ${targetDate}.` };
+          // Check if q matches a goal and that goal has an incomplete task for targetDate
+          const { match: matchedGoal } = findMatchingGoal(q, activeDb.prepare("SELECT * FROM goals WHERE status != 'removed'").all(), activeDb);
+          if (matchedGoal) {
+            const goalTask = activeDb.prepare(`
+              SELECT * FROM tasks WHERE goal_id = ? AND date = ? AND completed = 0 ORDER BY id ASC LIMIT 1
+            `).get(matchedGoal.id, targetDate);
+            if (goalTask) matchedTask = goalTask;
+          }
+
+          // Check day_plans for targetDate
+          if (!matchedTask) {
+            const planRow = activeDb.prepare('SELECT plan_json FROM day_plans WHERE date = ?').get(targetDate);
+            if (planRow && planRow.plan_json) {
+              try {
+                const plan = JSON.parse(planRow.plan_json);
+                const matchedItem = plan.find(i => (i.task || '').toLowerCase().includes(q.toLowerCase()));
+                if (matchedItem && matchedItem.task_id) {
+                  matchedTask = activeDb.prepare('SELECT * FROM tasks WHERE id = ?').get(matchedItem.task_id);
+                }
+              } catch (_) {}
+            }
+          }
+
+          if (!matchedTask) {
+            const fallbackCandidates = activeDb.prepare(`
+              SELECT * FROM tasks
+              WHERE LOWER(name) LIKE ? AND completed = 0
+              ORDER BY date DESC, id DESC
+            `).all(`%${q.toLowerCase()}%`);
+            if (fallbackCandidates.length === 1) {
+              matchedTask = fallbackCandidates[0];
+            } else if (fallbackCandidates.length > 1) {
+              return {
+                success: false,
+                ambiguous: true,
+                error: `Multiple tasks match "${q}". Please specify which one.`
+              };
+            } else {
+              return { success: false, error: `No tasks found matching "${q}" for ${targetDate}.` };
+            }
+          }
         }
         if (candidates.length > 1) {
           // If multiple, prefer incomplete one
@@ -454,7 +868,7 @@ const TOOLS = [
               error: `Multiple tasks match "${q}". Please specify which one.`
             };
           }
-        } else {
+        } else if (!matchedTask && candidates.length === 1) {
           matchedTask = candidates[0];
         }
       }
@@ -463,27 +877,14 @@ const TOOLS = [
         return { success: true, message: `Task "${matchedTask.name}" was already completed.`, task_id: matchedTask.id };
       }
 
-      db.prepare('UPDATE tasks SET completed = 1 WHERE id = ?').run(matchedTask.id);
-
-      // Sync Day Plan
-      const planRow = db.prepare('SELECT id, plan_json FROM day_plans WHERE date = ?').get(targetDate);
-      if (planRow && planRow.plan_json) {
-        try {
-          const plan = JSON.parse(planRow.plan_json);
-          for (const item of plan) {
-            if (item.task_id === matchedTask.id || (item.task && item.task.toLowerCase() === matchedTask.name.toLowerCase())) {
-              item.completed = 1;
-            }
-          }
-          db.prepare('UPDATE day_plans SET plan_json = ? WHERE id = ?').run(JSON.stringify(plan), planRow.id);
-        } catch (_) {}
-      }
+      // Mark complete via TaskService (atomic with goal consistency & day plan)
+      TaskService.completeTask(matchedTask.id, 1, context.todayDate, context.db || db);
 
       return {
         success: true,
         message: `Done! Marked "${matchedTask.name}" as completed.`,
         task_id: matchedTask.id,
-        updated: ['Day Plan', 'Goals']
+        updated: ['Day Plan', 'Goals', 'Dashboard']
       };
     }
   },
@@ -506,106 +907,100 @@ const TOOLS = [
       required: ['task_identifier']
     },
     handler: async (args, context) => {
+      const activeDb = context.db || db;
       const q = (args.task_identifier || '').trim();
       const targetDate = resolveTargetDate(args.date, context.todayDate);
 
       let matchedTask = null;
       if (/^\d+$/.test(q)) {
-        matchedTask = db.prepare('SELECT * FROM tasks WHERE id = ?').get(parseInt(q, 10));
+        matchedTask = activeDb.prepare('SELECT * FROM tasks WHERE id = ?').get(parseInt(q, 10));
       }
       if (!matchedTask) {
-        const candidates = db.prepare('SELECT * FROM tasks WHERE LOWER(name) LIKE ? AND date = ?').all(`%${q.toLowerCase()}%`, targetDate);
-        if (candidates.length === 0) return { success: false, error: `No tasks found matching "${q}".` };
-        matchedTask = candidates[0];
+        const candidates = activeDb.prepare(`
+          SELECT * FROM tasks 
+          WHERE LOWER(name) LIKE ? AND date = ?
+        `).all(`%${q.toLowerCase()}%`, targetDate);
+
+        if (candidates.length === 0) {
+          const fallback = activeDb.prepare(`
+            SELECT * FROM tasks 
+            WHERE LOWER(name) LIKE ? AND completed = 1 
+            ORDER BY date DESC, id DESC LIMIT 1
+          `).get(`%${q.toLowerCase()}%`);
+          if (fallback) matchedTask = fallback;
+          else return { success: false, error: `No tasks found matching "${q}".` };
+        } else {
+          const completed = candidates.filter(c => c.completed === 1);
+          if (completed.length === 1) matchedTask = completed[0];
+          else matchedTask = candidates[0];
+        }
       }
 
-      db.prepare('UPDATE tasks SET completed = 0 WHERE id = ?').run(matchedTask.id);
-
-      // Sync Day Plan
-      const planRow = db.prepare('SELECT id, plan_json FROM day_plans WHERE date = ?').get(targetDate);
-      if (planRow && planRow.plan_json) {
-        try {
-          const plan = JSON.parse(planRow.plan_json);
-          for (const item of plan) {
-            if (item.task_id === matchedTask.id || item.task === matchedTask.name) {
-              item.completed = 0;
-            }
-          }
-          db.prepare('UPDATE day_plans SET plan_json = ? WHERE id = ?').run(JSON.stringify(plan), planRow.id);
-        } catch (_) {}
-      }
+      // Mark incomplete via TaskService (atomic reversal & day plan)
+      TaskService.completeTask(matchedTask.id, 0, context.todayDate, activeDb);
 
       return {
         success: true,
         message: `Reopened "${matchedTask.name}".`,
         task_id: matchedTask.id,
-        updated: ['Day Plan']
+        updated: ['Day Plan', 'Goals', 'Dashboard']
       };
     }
   },
 
   {
     name: 'log_goal_progress',
-    description: 'Log newly completed problems or units for a count goal (e.g. solved 2 DSA problems), or 1 session for a frequency goal (e.g. ran today, 5km run). For frequency goals like running, 1 run counts as 1 session regardless of distance.',
+    description: 'Log newly completed units/problems for a count goal, 1 session for a frequency goal, or practice session for a milestone goal. Supports optional historical date.',
     parameters: {
       type: 'OBJECT',
       properties: {
         goal_identifier: {
           type: 'STRING',
-          description: 'Goal title, keyword (e.g. "LeetCode", "DSA", "Daily run", "run"), or goal ID.'
+          description: 'Goal title, keyword (e.g. "LeetCode", "DSA", "Daily run", "German"), or goal ID.'
         },
         amount: {
           type: 'INTEGER',
-          description: 'Number of units/problems or sessions completed (default 1 for frequency goals like running).'
+          description: 'Number of units/problems or sessions completed (default 1).'
+        },
+        unit: {
+          type: 'STRING',
+          description: 'Optional unit label (e.g. "problems", "session", "km", "minutes").'
+        },
+        date: {
+          type: 'STRING',
+          description: 'Date string: "today", "yesterday", or YYYY-MM-DD. Defaults to today in Asia/Kolkata.'
         },
         note: {
           type: 'STRING',
-          description: 'Optional audit note (e.g. "5 km").'
+          description: 'Optional audit note (e.g. "5 km", "BFS topic").'
         }
       },
       required: ['goal_identifier']
     },
     handler: async (args, context) => {
-      let amount = parseInt(args.amount, 10);
-      if (isNaN(amount) || amount <= 0) {
-        amount = 1;
-      }
-
+      const activeDb = context.db || db;
       const q = (args.goal_identifier || '').trim();
-      const { match: goal, ambiguous, candidates } = findMatchingGoal(q);
+      const activeGoals = activeDb.prepare("SELECT * FROM goals WHERE status != 'removed'").all();
+      const { match: goal, ambiguous, candidates } = findMatchingGoal(q, activeGoals, activeDb);
 
       if (ambiguous) {
-        const titles = candidates.map(c => `"${c.title}"`).join(' or ');
         return {
           success: false,
           ambiguous: true,
-          error: `Did you mean ${titles}? Please specify which goal you worked on.`
+          error: `Multiple goals match "${q}": ${candidates.map(c => `"${c.title}"`).join(', ')}. Please specify which goal you worked on.`
         };
       }
-
       if (!goal) {
         return { success: false, error: `Could not find an active goal matching "${q}".` };
       }
 
       const todayStr = getTodayDate(context.todayDate);
-      const isFrequency = goal.goal_type === 'frequency';
+      const targetDate = resolveTargetDate(args.date, context.todayDate);
 
-      // For frequency goals, amount is strictly the number of sessions (1 per run), not distance
-      let effectiveAmount = amount;
-      let auditNote = args.note || 'agent:log_goal_progress';
-      if (isFrequency) {
-        effectiveAmount = 1;
-        if (amount > 1 && (!args.note || args.note === 'agent:log_goal_progress')) {
-          auditNote = `${amount} km`;
-        } else if (args.note && !auditNote.includes('km') && amount > 1) {
-          auditNote = `${amount} km - ${args.note}`;
-        }
+      let effectiveNote = args.note || (args.unit ? `${args.amount || 1} ${args.unit}` : null);
+      if (goal.goal_type === 'frequency' && args.unit && args.unit.toLowerCase().includes('km')) {
+        effectiveNote = `${args.amount || 1} km`;
       }
-
-      const currentCount = goal.current_count || 0;
-      const targetCount = isFrequency ? (goal.per_week || 5) : (goal.target_count || 1);
-      const newCount = currentCount + effectiveAmount;
-      const reached = newCount >= targetCount;
 
       let msgIdNum = null;
       if (typeof context.messageId === 'number') msgIdNum = context.messageId;
@@ -614,67 +1009,55 @@ const TOOLS = [
         if (digits) msgIdNum = parseInt(digits.slice(-9), 10);
       }
 
-      const tx = db.transaction(() => {
-        db.prepare(`
-          UPDATE goals
-          SET current_count = ?, status = ?, completed_date = ?
-          WHERE id = ?
-        `).run(newCount, reached ? 'completed' : 'active', reached ? todayStr : null, goal.id);
+      try {
+        const res = logGoalProgress(goal.id, {
+          amount: args.amount,
+          date: targetDate,
+          note: effectiveNote,
+          chat_message_id: msgIdNum
+        }, todayStr, activeDb);
 
-        db.prepare(`
-          INSERT INTO goal_progress_log (goal_id, date, amount, note, chat_message_id)
-          VALUES (?, ?, ?, ?, ?)
-        `).run(goal.id, todayStr, effectiveAmount, auditNote, msgIdNum);
+        // Also check if today's day plan has an incomplete scheduled task for this goal
+        let dayPlanTaskCompleted = false;
+        const matchingTodayTask = activeDb.prepare(`
+          SELECT id, name FROM tasks 
+          WHERE goal_id = ? AND date = ? AND completed = 0 
+          ORDER BY id ASC LIMIT 1
+        `).get(goal.id, targetDate);
 
-        // Check if today has a corresponding task to mark complete
-        const task = db.prepare(`
-          SELECT id FROM tasks
-          WHERE (goal_id = ? OR LOWER(name) LIKE ?) AND date = ? AND completed = 0
-          LIMIT 1
-        `).get(goal.id, `%${goal.title.toLowerCase()}%`, todayStr);
-
-        if (task) {
-          db.prepare('UPDATE tasks SET completed = 1 WHERE id = ?').run(task.id);
+        if (matchingTodayTask) {
+          TaskService.completeTask(matchingTodayTask.id, 1, context.todayDate, activeDb);
+          dayPlanTaskCompleted = true;
         }
-      });
 
-      tx();
-
-      const cleanTitle = goal.title.replace(/\s*(?:320|\d+|practice|topic)\s*/gi, '').trim() || goal.title;
-      const unitLabel = isFrequency ? 'session' : 'problems';
-      const replyMsg = reached
-        ? `Logged ${effectiveAmount} ${unitLabel}. ${cleanTitle} target reached: ${newCount}/${targetCount}!`
-        : `Logged ${effectiveAmount} ${unitLabel}. ${cleanTitle} progress: ${currentCount}/${targetCount} → ${newCount}/${targetCount}.`;
-
-      return {
-        success: true,
-        message: replyMsg,
-        goal_id: goal.id,
-        goal_title: goal.title,
-        amount: effectiveAmount,
-        note: auditNote,
-        previous_count: currentCount,
-        new_count: newCount,
-        target_count: targetCount,
-        target_reached: reached,
-        updated: ['Goals', 'Dashboard']
-      };
+        return {
+          ...res,
+          day_plan_task_completed: dayPlanTaskCompleted,
+          updated: ['Goals', 'Dashboard', 'Night Summary', 'Day Plan']
+        };
+      } catch (err) {
+        return { success: false, error: err.error || err.message };
+      }
     }
   },
 
   {
     name: 'correct_goal_progress',
-    description: 'Correct a previously reported goal count (e.g. "correction: only one, not two" or "actually I solved 1, not 2"). Inserts an internal compensating adjustment row without modifying the original entry.',
+    description: 'Correct a previously reported goal count (e.g. "actually I solved 1, not 3"). Appends a compensating adjustment ledger row without modifying or deleting original records.',
     parameters: {
       type: 'OBJECT',
       properties: {
         goal_identifier: {
           type: 'STRING',
-          description: 'Title, keyword, or ID of the goal being corrected. Optional if referring to the last updated goal.'
+          description: 'Title, keyword, or ID of the goal being corrected.'
         },
         correct_amount: {
           type: 'INTEGER',
           description: 'The actual/corrected total amount of work completed (must be >= 0).'
+        },
+        entry_id: {
+          type: 'INTEGER',
+          description: 'Optional ID of the specific progress log entry to adjust.'
         },
         reason: {
           type: 'STRING',
@@ -684,27 +1067,25 @@ const TOOLS = [
       required: ['correct_amount']
     },
     handler: async (args, context) => {
-      const correctAmount = parseInt(args.correct_amount, 10);
-      if (isNaN(correctAmount) || correctAmount < 0) {
-        return { success: false, error: 'Corrected amount must be a non-negative integer (0 or greater).' };
-      }
-
-      // 1. Locate goal
+      const activeDb = context.db || db;
       let goal = null;
       if (args.goal_identifier) {
-        const { match, ambiguous, candidates } = findMatchingGoal(args.goal_identifier);
+        const { match, ambiguous, candidates } = findMatchingGoal(args.goal_identifier, null, activeDb);
         if (ambiguous) {
-          const titles = candidates.map(c => `"${c.title}"`).join(' or ');
-          return { success: false, ambiguous: true, error: `Multiple goals match "${args.goal_identifier}": ${titles}. Which one are you correcting?` };
+          return {
+            success: false,
+            ambiguous: true,
+            error: `Multiple goals match "${args.goal_identifier}": ${candidates.map(c => `"${c.title}"`).join(', ')}. Which one are you correcting?`
+          };
         }
         goal = match;
       }
 
       if (!goal) {
-        const lastLog = db.prepare(`
+        const lastLog = activeDb.prepare(`
           SELECT g.* FROM goal_progress_log l
           JOIN goals g ON l.goal_id = g.id
-          WHERE g.goal_type = 'count'
+          WHERE g.goal_type = 'count' AND g.status != 'removed'
           ORDER BY l.id DESC LIMIT 1
         `).get();
         if (lastLog) goal = lastLog;
@@ -714,63 +1095,7 @@ const TOOLS = [
         return { success: false, error: 'Could not determine which goal to correct. Please specify the goal name.' };
       }
 
-      // 2. Query positive entries in the last 24 hours (today or yesterday)
       const todayStr = getTodayDate(context.todayDate);
-      const yesterday = new Date(context.todayDate);
-      yesterday.setDate(yesterday.getDate() - 1);
-      const yesterdayStr = getTodayDate(yesterday);
-
-      const rawEntries = db.prepare(`
-        SELECT id, amount, date, chat_message_id, note
-        FROM goal_progress_log
-        WHERE goal_id = ? AND date IN (?, ?) AND amount > 0 AND note NOT LIKE 'correction_for:%'
-        ORDER BY id DESC
-      `).all(goal.id, todayStr, yesterdayStr);
-
-      // Compute effective remaining amount for each entry (original amount + compensating rows)
-      const candidateEntries = [];
-      for (const entry of rawEntries) {
-        const comp = db.prepare(`
-          SELECT SUM(amount) as comp_sum
-          FROM goal_progress_log
-          WHERE goal_id = ? AND note LIKE ?
-        `).get(goal.id, `correction_for:${entry.id}:%`);
-
-        const currentEffective = entry.amount + (comp && comp.comp_sum ? comp.comp_sum : 0);
-        if (currentEffective > 0) {
-          candidateEntries.push({
-            ...entry,
-            currentEffective
-          });
-        }
-      }
-
-      if (candidateEntries.length === 0) {
-        return { success: false, error: `No recent progress entry found to correct for "${goal.title}".` };
-      }
-
-      // If several candidate entries exist with positive remaining amounts, ask for clarification
-      if (candidateEntries.length > 1) {
-        return {
-          success: false,
-          ambiguous: true,
-          error: `Found ${candidateEntries.length} separate progress entries for "${goal.title}" in the last 24 hours. Please clarify which one you want to correct.`
-        };
-      }
-
-      const targetEntry = candidateEntries[0];
-      const currentEffectiveAmount = targetEntry.currentEffective;
-
-      // Delta is always correctAmount - currentEffectiveAmount (ignoring any model-supplied previous_amount)
-      const delta = correctAmount - currentEffectiveAmount;
-
-      if (delta === 0) {
-        return { success: true, message: `No change needed: "${goal.title}" is already recorded at ${correctAmount}.`, updated: [] };
-      }
-
-      const currentCount = goal.current_count || 0;
-      const targetCount = goal.target_count || 1;
-      const newCount = Math.max(0, currentCount + delta);
 
       let msgIdNum = null;
       if (typeof context.messageId === 'number') msgIdNum = context.messageId;
@@ -779,56 +1104,21 @@ const TOOLS = [
         if (digits) msgIdNum = parseInt(digits.slice(-9), 10);
       }
 
-      // Status adjustment:
-      // If newCount >= targetCount -> 'completed'
-      // If goal was 'completed' and newCount < targetCount -> must return to 'active'!
-      let newStatus = goal.status;
-      let completedDate = goal.completed_date;
-      if (newCount >= targetCount) {
-        newStatus = 'completed';
-        completedDate = completedDate || todayStr;
-      } else {
-        newStatus = 'active';
-        completedDate = null;
+      try {
+        const res = correctGoalProgress(goal.id, {
+          correct_amount: args.correct_amount,
+          entry_id: args.entry_id,
+          reason: args.reason,
+          chat_message_id: msgIdNum
+        }, todayStr, activeDb);
+
+        return {
+          ...res,
+          updated: ['Goals', 'Dashboard', 'Night Summary']
+        };
+      } catch (err) {
+        return { success: false, error: err.error || err.message };
       }
-
-      // 3. Insert compensating row (never edit original row)
-      const tx = db.transaction(() => {
-        db.prepare(`
-          UPDATE goals
-          SET current_count = ?, status = ?, completed_date = ?
-          WHERE id = ?
-        `).run(newCount, newStatus, completedDate, goal.id);
-
-        db.prepare(`
-          INSERT INTO goal_progress_log (goal_id, date, amount, note, chat_message_id)
-          VALUES (?, ?, ?, ?, ?)
-        `).run(
-          goal.id,
-          todayStr,
-          delta,
-          `correction_for:${targetEntry.id}:${args.reason || `adjusted from ${currentEffectiveAmount} to ${correctAmount}`}`,
-          msgIdNum
-        );
-      });
-
-      tx();
-
-      const cleanTitle = goal.title.replace(/\s*(?:320|\d+|practice|topic)\s*/gi, '').trim() || goal.title;
-      return {
-        success: true,
-        message: `Corrected! Adjusted ${cleanTitle} progress from ${currentCount} to ${newCount} (compensating delta: ${delta > 0 ? '+' : ''}${delta}).`,
-        goal_id: goal.id,
-        goal_title: goal.title,
-        original_entry_id: targetEntry.id,
-        previous_effective_amount: currentEffectiveAmount,
-        corrected_amount: correctAmount,
-        compensating_delta: delta,
-        previous_count: currentCount,
-        new_count: newCount,
-        new_status: newStatus,
-        updated: ['Goals', 'Dashboard']
-      };
     }
   },
 
@@ -850,6 +1140,7 @@ const TOOLS = [
       required: ['step_identifier']
     },
     handler: async (args, context) => {
+      const activeDb = context.db || db;
       const stepQuery = (args.step_identifier || '').trim().toLowerCase();
       if (!stepQuery) return { success: false, error: 'Step identifier is required.' };
 
@@ -857,9 +1148,9 @@ const TOOLS = [
         SELECT s.id AS step_id, s.step_text, s.done, g.id AS goal_id, g.title AS goal_title, g.status AS goal_status
         FROM goal_steps s
         JOIN goals g ON s.goal_id = g.id
-        WHERE g.status != 'removed'
+        WHERE g.status != 'removed' AND (s.is_deleted IS NULL OR s.is_deleted = 0)
       `;
-      const steps = db.prepare(stepsQuery).all();
+      const steps = activeDb.prepare(stepsQuery).all();
 
       const matched = steps.filter(s => {
         const text = (s.step_text || '').toLowerCase();
@@ -894,28 +1185,18 @@ const TOOLS = [
         };
       }
 
-      const todayStr = getTodayDate(context.todayDate);
-      db.transaction(() => {
-        db.prepare('UPDATE goal_steps SET done = 1 WHERE id = ?').run(target.step_id);
-        db.prepare(`
-          INSERT INTO goal_progress_log (goal_id, date, amount, note)
-          VALUES (?, ?, 1, ?)
-        `).run(target.goal_id, todayStr, `agent:step:${target.step_id}`);
-
-        // If all steps done, mark goal completed
-        const rem = db.prepare('SELECT COUNT(*) as cnt FROM goal_steps WHERE goal_id = ? AND done = 0').get(target.goal_id);
-        if (rem.cnt === 0) {
-          db.prepare('UPDATE goals SET status = "completed", completed_date = ? WHERE id = ?').run(todayStr, target.goal_id);
-        }
-      })();
-
-      return {
-        success: true,
-        message: `Done! ${target.step_text} is marked complete under ${cleanGoalTitle}.`,
-        step_id: target.step_id,
-        goal_id: target.goal_id,
-        updated: ['Goals']
-      };
+      try {
+        const res = manageGoalSteps(target.goal_id, 'complete', { step_id: target.step_id }, activeDb);
+        return {
+          success: true,
+          message: `Done! ${target.step_text} is marked complete under ${cleanGoalTitle}.`,
+          step_id: target.step_id,
+          goal_id: target.goal_id,
+          updated: ['Goals', 'Dashboard']
+        };
+      } catch (err) {
+        return { success: false, error: err.error || err.message };
+      }
     }
   },
 
@@ -992,24 +1273,26 @@ const TOOLS = [
 
   {
     name: 'replan_today',
-    description: 'Trigger automatic replanning of today\'s remaining tasks within available time.',
+    description: 'Report an unexpected event, urgent meeting, disruption, or trigger automatic replanning of today\'s remaining tasks within available time.',
     parameters: {
       type: 'OBJECT',
       properties: {
         reason: {
           type: 'STRING',
-          description: 'Reason for replanning (e.g. "Availability updated").'
+          description: 'The unexpected event or reason (e.g. "unexpected meeting at 4 PM", "urgent doctor appointment at 3 PM for 1 hour").'
         }
-      }
+      },
+      required: ['reason']
     },
     handler: async (args, context) => {
-      const reason = args.reason || 'Requested by chat';
+      const reason = args.reason || 'Unexpected event reported';
       try {
-        const result = replan(reason, context.nowDate || new Date());
+        const result = await replan(reason, context.nowDate || new Date());
         return {
           success: true,
-          message: `Replanned today's schedule (${result ? result.count : 0} task(s) scheduled).`,
-          updated: ['Day Plan']
+          message: `Replanned today's schedule around "${reason}" (${result ? result.count : 0} item(s) in timeline).`,
+          plan: result ? result.plan : [],
+          updated: ['Day Plan', 'Dashboard']
         };
       } catch (err) {
         return { success: false, error: `Replanning failed: ${err.message}` };
@@ -1057,6 +1340,7 @@ const TOOLS = [
       required: ['type', 'identifier']
     },
     handler: async (args, context) => {
+      const activeDb = context.db || db;
       const type = (args.type || '').toLowerCase();
       if (!['task', 'goal'].includes(type)) {
         return { success: false, error: 'Type must be "task" or "goal".' };
@@ -1067,8 +1351,8 @@ const TOOLS = [
 
       let target = null;
       if (type === 'goal') {
+        const activeGoals = activeDb.prepare("SELECT id, title FROM goals WHERE status = 'active'").all();
         if (/^(?:all\s+my\s+goals|all\s+goals|all)$/i.test(q)) {
-          const activeGoals = db.prepare("SELECT id, title FROM goals WHERE status = 'active'").all();
           if (activeGoals.length === 0) return { success: false, error: 'No active goals found to remove.' };
           const targetIds = activeGoals.map(g => g.id);
           const goalListDesc = activeGoals.map(g => `"${g.title}" (ID: ${g.id})`).join(', ');
@@ -1089,7 +1373,7 @@ const TOOLS = [
             target_titles: activeGoals.map(g => g.title)
           };
         }
-        const { match, ambiguous, candidates } = findMatchingGoal(q);
+        const { match, ambiguous, candidates } = findMatchingGoal(q, activeGoals);
         if (ambiguous) {
           const titles = candidates.map(c => `"${c.title}"`).join(' or ');
           return { success: false, ambiguous: true, error: `Multiple goals match "${q}": ${titles}. Please specify which one.` };
@@ -1099,21 +1383,41 @@ const TOOLS = [
       } else {
         const cleanQ = q.replace(/\b(?:task|item|assignment|session)\b/gi, '').trim();
         const searchTerm = cleanQ.length > 0 ? cleanQ : q;
-        const rows = db.prepare('SELECT id, name FROM tasks WHERE LOWER(name) LIKE ? AND date >= ? AND completed = 0').all(`%${searchTerm.toLowerCase()}%`, todayStr);
-        if (rows.length === 0) return { success: false, error: `No incomplete tasks found matching "${q}".` };
-        const uniqueTitles = [...new Set(rows.map(r => r.name.trim()))];
-        if (uniqueTitles.length > 1) {
-          return { success: false, ambiguous: true, error: `Multiple tasks match "${q}": ${uniqueTitles.map(t => `"${t}"`).join(', ')}. Please specify which one you want to delete.` };
+        const rows = activeDb.prepare('SELECT id, name FROM tasks WHERE LOWER(name) LIKE ? AND date >= ? AND completed = 0').all(`%${searchTerm.toLowerCase()}%`, todayStr);
+        if (rows.length === 0) {
+          // Check day_plans for today
+          const planRow = activeDb.prepare('SELECT plan_json FROM day_plans WHERE date = ?').get(todayStr);
+          if (planRow && planRow.plan_json) {
+            try {
+              const plan = JSON.parse(planRow.plan_json);
+              const matchedPlanItem = plan.find(i => (i.task || '').toLowerCase().includes(searchTerm.toLowerCase()));
+              if (matchedPlanItem) {
+                target = {
+                  id: matchedPlanItem.task_id || 0,
+                  targetIds: matchedPlanItem.task_id ? [matchedPlanItem.task_id] : [],
+                  title: matchedPlanItem.task,
+                  isPlanItem: true
+                };
+              }
+            } catch (_) {}
+          }
+          if (!target) return { success: false, error: `No incomplete tasks or plan items found matching "${q}".` };
+        } else {
+          const uniqueTitles = [...new Set(rows.map(r => r.name.trim()))];
+          if (uniqueTitles.length > 1) {
+            return { success: false, ambiguous: true, error: `Multiple tasks match "${q}": ${uniqueTitles.map(t => `"${t}"`).join(', ')}. Please specify which one you want to delete.` };
+          }
+          target = { id: rows[0].id, targetIds: rows.map(r => r.id), title: rows[0].name };
         }
-        target = { id: rows[0].id, targetIds: rows.map(r => r.id), title: rows[0].name };
       }
 
       // Store pending removal state (2 minutes)
       setPendingState({
         type: 'removal',
-        removalType: type,
+        removalType: target.isPlanItem ? 'plan_item' : type,
         targetId: target.id,
         targetIds: target.targetIds || [target.id],
+        targetTaskId: target.id || null,
         targetTitle: target.title,
         todayStr,
         expiresAt: Date.now() + 2 * 60 * 1000
@@ -1122,9 +1426,172 @@ const TOOLS = [
       return {
         success: true,
         pending_confirmation: true,
-        message: `Remove ${type} "${target.title}"? Reply yes to confirm (or no to cancel). This expires in 2 minutes.`,
+        message: `Remove ${target.isPlanItem ? 'plan item' : type} "${target.title}"? Reply yes to confirm (or no to cancel). This expires in 2 minutes.`,
         target_id: target.id,
         target_title: target.title
+      };
+    }
+  },
+
+  {
+    name: 'get_free_slots',
+    description: 'Calculate and return available / free time slots for a specific date (e.g. "today", "tomorrow", or "YYYY-MM-DD") based on timetable and scheduled tasks.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        date: {
+          type: 'STRING',
+          description: 'Date string: "today", "tomorrow", or YYYY-MM-DD. Defaults to today.'
+        }
+      }
+    },
+    handler: async (args, context) => {
+      const activeDb = context.db || db;
+      const targetDate = resolveTargetDate(args.date, context.todayDate);
+      const availabilityService = require('./availabilityService');
+      const avail = availabilityService.calculateFreeSlots(targetDate, {}, activeDb);
+
+      let summary = `Free slots for ${avail.day_of_week} (${avail.date}):\n`;
+      if (avail.free_slots.length === 0) {
+        summary += 'No free time slots available within your scheduled window.';
+      } else {
+        avail.free_slots.forEach(f => {
+          summary += `• ${f.start_time}–${f.end_time} (${f.duration_min} min free)\n`;
+        });
+        summary += `Total available time: ${avail.total_free_hours} hours (${avail.total_free_minutes} min).`;
+      }
+
+      return {
+        success: true,
+        date: targetDate,
+        day_of_week: avail.day_of_week,
+        total_free_hours: avail.total_free_hours,
+        total_free_minutes: avail.total_free_minutes,
+        free_slots: avail.free_slots,
+        committed_blocks: avail.committed_blocks,
+        message: summary.trim()
+      };
+    }
+  },
+
+  {
+    name: 'get_weekly_availability',
+    description: 'Get weekly free hours and availability summary across 7 days starting from a given date.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        start_date: {
+          type: 'STRING',
+          description: 'Start date: "today" or YYYY-MM-DD. Defaults to today.'
+        }
+      }
+    },
+    handler: async (args, context) => {
+      const activeDb = context.db || db;
+      const targetDate = resolveTargetDate(args.start_date, context.todayDate);
+      const availabilityService = require('./availabilityService');
+      const summary = availabilityService.getWeeklyAvailabilitySummary(targetDate, activeDb);
+
+      let msg = `Weekly Availability Summary (7 days starting ${targetDate}):\n`;
+      msg += `Total Free Time: ${summary.total_free_hours} hours (Committed: ${summary.total_committed_hours} hours)\n\n`;
+      summary.days.forEach(d => {
+        msg += `• ${d.day_of_week} (${d.date}): ${d.free_hours} hrs free (${d.classes_count} classes scheduled)\n`;
+      });
+
+      return {
+        success: true,
+        start_date: targetDate,
+        total_free_hours: summary.total_free_hours,
+        total_committed_hours: summary.total_committed_hours,
+        days: summary.days,
+        message: msg.trim()
+      };
+    }
+  },
+
+  {
+    name: 'cancel_classes_for_date',
+    description: 'Record a one-day cancellation for all classes or a specific lecture without altering the permanent recurring timetable.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        date: {
+          type: 'STRING',
+          description: 'Date of cancellation: "today", "tomorrow", or YYYY-MM-DD.'
+        },
+        subject: {
+          type: 'STRING',
+          description: 'Optional subject name if only cancelling a single lecture (e.g. "Operating Systems"). Omit to cancel all classes.'
+        },
+        reason: {
+          type: 'STRING',
+          description: 'Optional reason or note (e.g. "Holiday", "Professor absent").'
+        }
+      }
+    },
+    handler: async (args, context) => {
+      const activeDb = context.db || db;
+      const targetDate = resolveTargetDate(args.date, context.todayDate);
+      const availabilityService = require('./availabilityService');
+
+      let res;
+      if (args.subject && args.subject.trim()) {
+        res = availabilityService.cancelSingleClass(targetDate, args.subject.trim(), activeDb);
+      } else {
+        res = availabilityService.cancelClassesForDate(targetDate, args.reason || 'Cancelled via Chat', activeDb);
+      }
+
+      return {
+        ...res,
+        updated: ['timetable', 'plan', 'Dashboard']
+      };
+    }
+  },
+
+  {
+    name: 'add_extra_class',
+    description: 'Add an extra lecture or one-day temporary timetable commitment for a specific date.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        date: {
+          type: 'STRING',
+          description: 'Date for the extra class ("today", "tomorrow", or YYYY-MM-DD).'
+        },
+        subject: {
+          type: 'STRING',
+          description: 'Subject or lecture title (e.g. "Practical Lab", "Extra Math").'
+        },
+        start_time: {
+          type: 'STRING',
+          description: 'Start time (e.g. "2:00 PM" or "14:00").'
+        },
+        end_time: {
+          type: 'STRING',
+          description: 'End time (e.g. "4:00 PM" or "16:00").'
+        },
+        location: {
+          type: 'STRING',
+          description: 'Optional classroom or lab.'
+        }
+      },
+      required: ['subject', 'start_time', 'end_time']
+    },
+    handler: async (args, context) => {
+      const activeDb = context.db || db;
+      const targetDate = resolveTargetDate(args.date, context.todayDate);
+      const availabilityService = require('./availabilityService');
+
+      const res = availabilityService.addExtraClass(targetDate, {
+        subject: args.subject.trim(),
+        start_time: args.start_time.trim(),
+        end_time: args.end_time.trim(),
+        location: args.location || null
+      }, activeDb);
+
+      return {
+        ...res,
+        updated: ['timetable', 'plan', 'Dashboard']
       };
     }
   }
@@ -1144,10 +1611,52 @@ function getGeminiFunctionDeclarations() {
   }));
 }
 
+// Convert schema types recursively to lowercase for OpenAI / Groq standard JSON Schema
+function normalizeSchemaType(schema) {
+  if (!schema || typeof schema !== 'object') return schema;
+  if (Array.isArray(schema)) return schema.map(s => normalizeSchemaType(s));
+  const normalized = {};
+  for (const [key, val] of Object.entries(schema)) {
+    if (key === 'type' && typeof val === 'string') {
+      normalized.type = val.toLowerCase();
+    } else if (key === 'properties' && typeof val === 'object' && val !== null) {
+      const props = {};
+      const reqs = schema.required || [];
+      for (const [propName, propDef] of Object.entries(val)) {
+        const normProp = normalizeSchemaType(propDef);
+        // If not in required list and type is a single string (not array or object), allow null for resilient model compatibility
+        if (!reqs.includes(propName) && typeof normProp.type === 'string' && normProp.type !== 'object' && normProp.type !== 'array') {
+          normProp.type = [normProp.type, 'null'];
+        }
+        props[propName] = normProp;
+      }
+      normalized.properties = props;
+    } else if (typeof val === 'object' && val !== null) {
+      normalized[key] = normalizeSchemaType(val);
+    } else {
+      normalized[key] = val;
+    }
+  }
+  return normalized;
+}
+
+// Convert tools to OpenAI / Groq API tool definitions format
+function getOpenAIToolDefinitions() {
+  return TOOLS.map(t => ({
+    type: 'function',
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: normalizeSchemaType(t.parameters)
+    }
+  }));
+}
+
 module.exports = {
   TOOLS,
   getToolByName,
   getGeminiFunctionDeclarations,
+  getOpenAIToolDefinitions,
   resolveTargetDate
 };
 

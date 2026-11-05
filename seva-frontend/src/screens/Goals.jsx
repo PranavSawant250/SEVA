@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import client from '../api/client';
 import { getPriorityBadgeClass } from '../utils/themeUtils';
+import { useDataSync, emitDataMutated } from '../utils/syncEvents';
 
 export default function Goals() {
   const [loading, setLoading] = useState(true);
@@ -49,6 +50,10 @@ export default function Goals() {
     }
   }, []);
 
+  useDataSync(['goals', 'tasks', 'plan'], () => {
+    fetchGoals();
+  });
+
   useEffect(() => {
     fetchGoals();
   }, [fetchGoals]);
@@ -77,6 +82,7 @@ export default function Goals() {
           text: `Imported (${res.data.created} created, ${res.data.updated} updated).${overdueText}`
         });
         setJsonInput('');
+        emitDataMutated(['goals', 'tasks', 'plan']);
         await fetchGoals();
       } else {
         setImportFeedback({ type: 'error', text: res.data.error || 'Import failed.' });
@@ -99,6 +105,7 @@ export default function Goals() {
     setBusyGoalId(goalId);
     try {
       await client.post(`/goals/${goalId}/log`, { amount });
+      emitDataMutated(['goals', 'tasks', 'plan']);
       await fetchGoals();
     } catch (err) {
       alert(err.response?.data?.error || err.message || 'Failed to log progress');
@@ -114,6 +121,7 @@ export default function Goals() {
       await client.patch(`/goals/${goalId}/steps/${stepId}`, {
         done: currentDone === 1 ? 0 : 1
       });
+      emitDataMutated(['goals', 'tasks', 'plan']);
       await fetchGoals();
     } catch (err) {
       alert(err.response?.data?.error || err.message || 'Failed to toggle step');
@@ -129,6 +137,7 @@ export default function Goals() {
       await client.patch(`/goals/${goalId}`, {
         manual_progress: valueOrNull
       });
+      emitDataMutated(['goals', 'plan']);
       await fetchGoals();
     } catch (err) {
       alert(err.response?.data?.error || err.message || 'Failed to update manual progress');
@@ -146,6 +155,7 @@ export default function Goals() {
       } else {
         await client.patch(`/goals/${goalId}`, { status });
       }
+      emitDataMutated(['goals', 'tasks', 'plan']);
       await fetchGoals();
     } catch (err) {
       alert(err.response?.data?.error || err.message || 'Failed to update goal status');
@@ -334,6 +344,11 @@ export default function Goals() {
                         {isCompleted && (
                           <span className="text-xs font-bold uppercase px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
                             Completed
+                          </span>
+                        )}
+                        {goal.is_paused && !isRemoved && !isCompleted && (
+                          <span className="text-xs font-bold uppercase px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                            Paused
                           </span>
                         )}
                       </div>
@@ -537,14 +552,34 @@ export default function Goals() {
                       ) : (
                         <>
                           {!isCompleted ? (
-                            <button
-                              onClick={() => handleStatusChange(goal.id, 'completed')}
-                              disabled={isBusy}
-                              className="px-3 py-1.5 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 rounded-lg text-xs font-medium flex items-center gap-1 cursor-pointer"
-                            >
-                              <CheckCircle2 size={13} />
-                              <span>Mark complete</span>
-                            </button>
+                            <>
+                              <button
+                                onClick={() => handleStatusChange(goal.id, 'completed')}
+                                disabled={isBusy}
+                                className="px-3 py-1.5 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 rounded-lg text-xs font-medium flex items-center gap-1 cursor-pointer"
+                              >
+                                <CheckCircle2 size={13} />
+                                <span>Mark complete</span>
+                              </button>
+                              {goal.is_paused ? (
+                                <button
+                                  onClick={() => handleStatusChange(goal.id, 'active')}
+                                  disabled={isBusy}
+                                  className="px-2.5 py-1.5 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 rounded-lg text-xs font-medium flex items-center gap-1 cursor-pointer"
+                                >
+                                  <RotateCcw size={13} />
+                                  <span>Resume</span>
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => handleStatusChange(goal.id, 'paused')}
+                                  disabled={isBusy}
+                                  className="px-2.5 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-xs font-medium flex items-center gap-1 cursor-pointer"
+                                >
+                                  <span>Pause</span>
+                                </button>
+                              )}
+                            </>
                           ) : (
                             <button
                               onClick={() => handleStatusChange(goal.id, 'active')}

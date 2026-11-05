@@ -1,7 +1,8 @@
 const express = require('express');
 const cors = require('cors');
 const cron = require('node-cron');
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 
 // Initialize database & table schemas
 const db = require('./database/db');
@@ -39,8 +40,10 @@ app.use('/api/goals', require('./routes/goals'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/nightly', require('./routes/nightly'));
 
-// STEP 5: Auto-fetch emails and analyze every 30 minutes using node-cron
-cron.schedule('*/30 * * * *', async () => {
+// STEP 5: Auto-fetch emails and analyze every 5 minutes using node-cron with concurrency fencing
+let isEmailSyncRunning = false;
+
+cron.schedule('*/5 * * * *', async () => {
   const timestamp = new Date().toLocaleString();
   
   if (!gmailService.isLoggedIn()) {
@@ -48,13 +51,21 @@ cron.schedule('*/30 * * * *', async () => {
     return;
   }
 
+  if (isEmailSyncRunning) {
+    console.log(`[${timestamp}] ⏰ Cron sync skipped: Previous 5-minute email fetch & analysis is still in progress.`);
+    return;
+  }
+
+  isEmailSyncRunning = true;
   try {
-    console.log(`[${timestamp}] ⏰ Running scheduled 30-minute Gmail email fetch & AI analysis...`);
+    console.log(`[${timestamp}] ⏰ Running scheduled 5-minute Gmail email fetch & AI analysis...`);
     const insertedCount = await gmailService.fetchRecentEmails();
     const analyzedCount = await aiService.processUnanalyzedEmails();
     console.log(`[${timestamp}] ⏰ Scheduled email sync complete. ${insertedCount} new email(s) inserted, ${analyzedCount} email(s) analyzed.`);
   } catch (error) {
     console.error(`[${timestamp}] ❌ Error during scheduled email sync:`, error.message);
+  } finally {
+    isEmailSyncRunning = false;
   }
 });
 

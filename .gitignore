@@ -20,6 +20,9 @@ backend/credentials/
 seva.db
 backend/*.db
 backend/seva.db
+backend/*.bak*
+backend/uploads/
+*.traineddata
 
 # Details folder
 details/

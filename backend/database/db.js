@@ -287,6 +287,56 @@ try {
 })();
 
 // ─────────────────────────────────────────────────────────────
+// Phase 2 Additive columns on goals (guarded per-column)
+// ─────────────────────────────────────────────────────────────
+(function addGoalsColumnsIfMissing() {
+  const existingCols = db.prepare("PRAGMA table_info(goals)").all().map(c => c.name);
+
+  const newCols = [
+    {
+      name: 'is_paused',
+      sql: "ALTER TABLE goals ADD COLUMN is_paused INTEGER DEFAULT 0 CHECK(is_paused IN (0, 1) AND (is_paused = 0 OR status = 'active'))"
+    },
+    {
+      name: 'paused_at',
+      sql: 'ALTER TABLE goals ADD COLUMN paused_at TEXT NULL'
+    },
+    {
+      name: 'total_paused_days',
+      sql: 'ALTER TABLE goals ADD COLUMN total_paused_days INTEGER DEFAULT 0'
+    }
+  ];
+
+  for (const col of newCols) {
+    if (!existingCols.includes(col.name)) {
+      db.exec(col.sql);
+      console.log(`  📐 Added column goals.${col.name}`);
+    }
+  }
+})();
+
+// ─────────────────────────────────────────────────────────────
+// Phase 2 Additive columns on goal_steps (guarded per-column)
+// ─────────────────────────────────────────────────────────────
+(function addGoalStepsColumnsIfMissing() {
+  const existingCols = db.prepare("PRAGMA table_info(goal_steps)").all().map(c => c.name);
+
+  const newCols = [
+    {
+      name: 'is_deleted',
+      sql: 'ALTER TABLE goal_steps ADD COLUMN is_deleted INTEGER DEFAULT 0 CHECK(is_deleted IN (0, 1))'
+    }
+  ];
+
+  for (const col of newCols) {
+    if (!existingCols.includes(col.name)) {
+      db.exec(col.sql);
+      console.log(`  📐 Added column goal_steps.${col.name}`);
+    }
+  }
+})();
+
+// ─────────────────────────────────────────────────────────────
 // Phase 10 — Session-Scoped Idempotency & Device Security Schema
 // Executed atomically inside a transaction; safe to run on every boot.
 // ─────────────────────────────────────────────────────────────
@@ -351,6 +401,75 @@ try {
   });
 
   applyMigration();
+})();
+
+// ─────────────────────────────────────────────────────────────
+// Phase 3 tables — Weekly Timetable, Entries, Exceptions
+// ─────────────────────────────────────────────────────────────
+(function initPhase3TimetableTables() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS weekly_timetable (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL DEFAULT 'Default Weekly Timetable',
+      is_active INTEGER DEFAULT 1 CHECK(is_active IN (0, 1)),
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS timetable_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timetable_id INTEGER NOT NULL,
+      day_of_week TEXT NOT NULL CHECK(day_of_week IN ('Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday')),
+      title TEXT NOT NULL,
+      start_time TEXT NOT NULL,
+      end_time TEXT NOT NULL,
+      event_type TEXT DEFAULT 'class',
+      location TEXT NULL,
+      is_active INTEGER DEFAULT 1 CHECK(is_active IN (0, 1)),
+      FOREIGN KEY(timetable_id) REFERENCES weekly_timetable(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS timetable_exceptions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      date TEXT NOT NULL,
+      entry_id INTEGER NULL,
+      action TEXT NOT NULL CHECK(action IN ('cancel_all', 'cancel_entry', 'add_override', 'reschedule')),
+      subject TEXT NULL,
+      start_time TEXT NULL,
+      end_time TEXT NULL,
+      note TEXT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY(entry_id) REFERENCES timetable_entries(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_timetable_entries_lookup
+      ON timetable_entries(timetable_id, day_of_week, is_active);
+
+    CREATE INDEX IF NOT EXISTS idx_timetable_exceptions_date
+      ON timetable_exceptions(date);
+  `);
+
+  // Data migration: if weekly_timetable is empty but legacy timetable has rows, populate it
+  try {
+    const wtCount = db.prepare('SELECT COUNT(*) as count FROM weekly_timetable').get().count;
+    if (wtCount === 0) {
+      const legacyRows = db.prepare('SELECT day_of_week, subject, start_time, end_time FROM timetable').all();
+      if (legacyRows.length > 0) {
+        const insWt = db.prepare("INSERT INTO weekly_timetable (name, is_active) VALUES ('Imported College Schedule', 1)").run();
+        const wtId = insWt.lastInsertRowid;
+        const insEntry = db.prepare(`
+          INSERT INTO timetable_entries (timetable_id, day_of_week, title, start_time, end_time, event_type, is_active)
+          VALUES (?, ?, ?, ?, ?, 'class', 1)
+        `);
+        for (const row of legacyRows) {
+          insEntry.run(wtId, row.day_of_week, row.subject, row.start_time, row.end_time);
+        }
+        console.log(`  📐 Phase 3: Migrated ${legacyRows.length} legacy timetable rows into weekly_timetable & timetable_entries.`);
+      }
+    }
+  } catch (err) {
+    console.warn('⚠️ Phase 3 timetable migration notice:', err.message);
+  }
 })();
 
 console.log('✅ SQLite Database initialized and all SEVA tables created in seva.db');

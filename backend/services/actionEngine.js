@@ -26,6 +26,7 @@ const db = require('../database/db');
 const { getTodayDate, getTomorrowDate, parseTimeToMinutes, minutesToTimeString, daysBetween } = require('../utils/dateUtils');
 const { getAllGoals, computeGoalProgress } = require('./goalsService');
 const { replan, generateDayPlan } = require('./plannerService');
+const TaskService = require('./taskService');
 
 // Number words converter for English
 const NUMBER_WORDS = {
@@ -549,10 +550,9 @@ function handleTaskReschedule(msg, todayDateObj) {
   }
 
   // Check conflicts with timetable (fixed class/work commitments)
-  const dayName = todayDateObj.toLocaleDateString('en-US', { weekday: 'long' });
-  const timetableBlocks = db.prepare(`
-    SELECT subject, start_time, end_time FROM timetable WHERE day_of_week = ?
-  `).all(dayName);
+  const availabilityService = require('./availabilityService');
+  const eff = availabilityService.getEffectiveTimetableForDate(todayStr, db);
+  const timetableBlocks = eff.classes || [];
 
   for (const block of timetableBlocks) {
     const bStart = parseTimeToMinutes(block.start_time);
@@ -565,29 +565,13 @@ function handleTaskReschedule(msg, todayDateObj) {
     }
   }
 
-  // Update task
+  // Update task via centralized TaskService
   const formattedTime = minutesToTimeString(targetMins);
-  db.prepare(`
-    UPDATE tasks
-    SET time_slot = ?, fixed_start = ?
-    WHERE id = ?
-  `).run(formattedTime, formattedTime, matchedTask.id);
+  TaskService.updateTask(matchedTask.id, {
+    time_slot: formattedTime,
+    fixed_start: formattedTime
+  });
 
-  // Sync Day Plan
-  const planRow = db.prepare('SELECT id, plan_json FROM day_plans WHERE date = ?').get(todayStr);
-  if (planRow && planRow.plan_json) {
-    try {
-      const plan = JSON.parse(planRow.plan_json);
-      for (const item of plan) {
-        if (item.task_id === matchedTask.id || item.task.toLowerCase().includes(taskQuery.toLowerCase())) {
-          item.time = formattedTime;
-        }
-      }
-      db.prepare('UPDATE day_plans SET plan_json = ? WHERE id = ?').run(JSON.stringify(plan), planRow.id);
-    } catch (_) {}
-  }
-
-  const cleanTime = formattedTime.replace(/:00\s*/, ' ');
   return `Moved ${matchedTask.name} to ${formattedTime}.`;
 }
 
@@ -667,20 +651,8 @@ function handleTaskCompletion(msg, todayDateObj) {
   const matchedTask = tasks.find(t => t.name.toLowerCase().includes(rawQuery));
   if (!matchedTask) return null;
 
-  // Mark task completed
-  db.prepare('UPDATE tasks SET completed = 1 WHERE id = ?').run(matchedTask.id);
-
-  // Sync Day Plan
-  const planRow = db.prepare('SELECT id, plan_json FROM day_plans WHERE date = ?').get(todayStr);
-  if (planRow && planRow.plan_json) {
-    try {
-      const plan = JSON.parse(planRow.plan_json);
-      for (const item of plan) {
-        if (item.task_id === matchedTask.id) item.completed = 1;
-      }
-      db.prepare('UPDATE day_plans SET plan_json = ? WHERE id = ?').run(JSON.stringify(plan), planRow.id);
-    } catch (_) {}
-  }
+  // Mark task completed via centralized TaskService
+  TaskService.completeTask(matchedTask.id, 1, todayDateObj);
 
   return `Completed "${matchedTask.name}". Your schedule has been updated.`;
 }
@@ -727,8 +699,8 @@ function handleAvailabilityUpdate(msg, todayDateObj, nowDate) {
  */
 function handleFrequencyProgress(msg, todayDateObj) {
   const lower = (msg || '').toLowerCase().trim();
-  // Guard: questions, hypotheticals, future plans
-  if (/\b(?:should|can|could|would|what\s+if|if\s+i|tomorrow|tonight|later)\b/i.test(lower) || lower.includes('?')) {
+  // Guard: questions, hypotheticals, future plans, removals
+  if (/\b(?:should|can|could|would|what\s+if|if\s+i|tomorrow|tonight|later|delete|remove)\b/i.test(lower) || lower.includes('?')) {
     return null;
   }
   // Guard: reported speech
@@ -951,34 +923,17 @@ function handleAddTask(msg, todayDateObj) {
   // Link to goal if possible
   const { match: goal } = findMatchingGoal(taskName);
 
-  // Atomic database insert
-  const res = db.prepare(`
-    INSERT INTO tasks (name, priority, source, completed, date, duration_min, time_slot, goal_id)
-    VALUES (?, ?, 'manual', 0, ?, ?, ?, ?)
-  `).run(taskName, priority, targetDate, duration, formattedTime, goal ? goal.id : null);
-
-  const newTaskId = res.lastInsertRowid;
-
-  // Sync to Day Plan if scheduled for today and plan exists
-  const todayStr = getTodayDate(todayDateObj);
-  if (targetDate === todayStr) {
-    const planRow = db.prepare('SELECT id, plan_json FROM day_plans WHERE date = ?').get(todayStr);
-    if (planRow && planRow.plan_json) {
-      try {
-        const plan = JSON.parse(planRow.plan_json);
-        plan.push({
-          task_id: newTaskId,
-          task: taskName,
-          priority,
-          duration,
-          time: formattedTime || 'flexible',
-          completed: 0,
-          source: 'manual'
-        });
-        db.prepare('UPDATE day_plans SET plan_json = ? WHERE id = ?').run(JSON.stringify(plan), planRow.id);
-      } catch (_) {}
-    }
-  }
+  // Insert task via centralized TaskService
+  const createdTask = TaskService.createTask({
+    name: taskName,
+    priority,
+    duration_min: duration,
+    date: targetDate,
+    time_slot: formattedTime,
+    fixed_start: formattedTime,
+    goal_id: goal ? goal.id : null,
+    source: 'manual'
+  });
 
   return `Added "${taskName}" (${duration} min, ${priority} priority) scheduled for ${dateLabel}${formattedTime ? ` at ${formattedTime}` : ''}.`;
 }
@@ -1182,10 +1137,10 @@ function handleConversationalPlan(msg, todayDateObj, nowDate) {
     }
   }
 
-  // 5. Fetch timetable commitments for targetWeekday (fixed blocks)
-  const timetableBlocks = db.prepare(`
-    SELECT subject, start_time, end_time FROM timetable WHERE day_of_week = ? ORDER BY start_time ASC
-  `).all(targetWeekday);
+  // 5. Fetch timetable commitments for targetDate (fixed blocks)
+  const availabilityService = require('./availabilityService');
+  const eff = availabilityService.getEffectiveTimetableForDate(targetDate, db);
+  const timetableBlocks = eff.classes || [];
 
   // 6. Slot tasks around timetable
   const planItems = [];
@@ -1292,6 +1247,169 @@ function handleConversationalPlan(msg, todayDateObj, nowDate) {
 }
 
 /**
+ * Phase 3 — Natural language availability and timetable actions
+ */
+function handleTimetableActions(message, todayDateObj) {
+  const msg = message.toLowerCase().trim();
+  const todayStr = getTodayDate(todayDateObj);
+  const tomorrowStr = getTomorrowDate(todayDateObj);
+  const availabilityService = require('./availabilityService');
+
+  // 1. Weekly free hours query ("how many hours am i free this week", "weekly free hours")
+  if (/(?:how many hours|how free|free hours).*(?:this week|weekly)/i.test(msg) || /^(?:weekly availability|free hours this week)$/i.test(msg)) {
+    const summary = availabilityService.getWeeklyAvailabilitySummary(todayStr, db);
+    let reply = `You have a total of ${summary.total_free_hours} free hours this week across 7 days:\n`;
+    summary.days.forEach(d => {
+      reply += `• ${d.day_of_week} (${d.date}): ${d.free_hours} hrs free (${d.classes_count} classes)\n`;
+    });
+    return reply.trim();
+  }
+
+  // 2. Daily free slots query ("show me my free slots tomorrow", "when am i free today", "free slots today", "available hours tomorrow")
+  if (/(?:free slots|available hours|when am i free|free time)/i.test(msg)) {
+    const isTomorrow = /\btomorrow\b/i.test(msg);
+    const targetDate = isTomorrow ? tomorrowStr : todayStr;
+    const avail = availabilityService.calculateFreeSlots(targetDate, {}, db);
+    const dayLabel = isTomorrow ? 'tomorrow' : 'today';
+
+    if (avail.free_slots.length === 0) {
+      return `You have no free slots ${dayLabel} (${avail.day_of_week}) within your scheduled window.`;
+    }
+
+    let reply = `Here are your free slots for ${dayLabel} (${avail.day_of_week}, ${targetDate}):\n`;
+    avail.free_slots.forEach(f => {
+      reply += `• ${f.start_time}–${f.end_time} (${f.duration_min} min free)\n`;
+    });
+    reply += `Total available time: ${avail.total_free_hours} hours.`;
+    return reply;
+  }
+
+  // 3. Whole-day class cancellation ("i have no college tomorrow", "no college today", "holiday tomorrow", "college is cancelled today")
+  if (/(?:no college|holiday|classes? (?:are )?cancelled|college is cancelled)/i.test(msg)) {
+    const isTomorrow = /\btomorrow\b/i.test(msg);
+    const targetDate = isTomorrow ? tomorrowStr : todayStr;
+    const dayLabel = isTomorrow ? 'tomorrow' : 'today';
+    availabilityService.cancelClassesForDate(targetDate, 'Cancelled by user', db);
+    return `Got it — recorded no college for ${dayLabel} (${targetDate}). Your Day Plan will treat the entire day as open availability.`;
+  }
+
+  // 3.5 Recurring weekly class time change ("My Monday lecture is now from 11 AM to 12 PM", "Change Monday OS lecture to 11 AM to 12 PM")
+  const permMatch = message.match(/(?:my\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+([a-z0-9\s]+?)\s*(?:lecture|class|session|practical|lab)?\s+is\s+now\s+(?:from\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*(?:-|to)\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i) ||
+                    message.match(/change\s+(?:my\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+([a-z0-9\s]+?)\s*(?:lecture|class|session|practical|lab)?\s+to\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*(?:-|to)\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i);
+  if (permMatch) {
+    const rawDay = permMatch[1].trim();
+    const dayName = rawDay.charAt(0).toUpperCase() + rawDay.slice(1).toLowerCase();
+    const subject = (permMatch[2] || '').trim() || 'class';
+    const sRaw = permMatch[3].trim();
+    const eRaw = permMatch[4].trim();
+    const { parseTimetableRange } = require('./timetableExtractor');
+    const range = parseTimetableRange(sRaw, eRaw);
+    if (range) {
+      const { setPendingState } = require('./chatCommands');
+      setPendingState({
+        type: 'permanent_timetable_update',
+        day_of_week: dayName,
+        subject,
+        new_start: range.start,
+        new_end: range.end,
+        expiresAt: Date.now() + 5 * 60 * 1000
+      });
+      return `Do you want to permanently update your recurring ${dayName} "${subject}" schedule to ${range.start}–${range.end}?\n\nReply **"yes"** or **"confirm"** to save permanently, or **"today only"** for a single-day exception.`;
+    }
+  }
+
+  // 4. Single lecture cancellation ("my monday lecture is cancelled", "my os lecture is cancelled today", "my practical is cancelled today")
+  const cancelSingleMatch = msg.match(/(?:cancel|cancelled)\s+(?:my\s+)?([a-z0-9\s]+?)\s*(?:lecture|class|session|practical|lab)(?:\s+(today|tomorrow))?/i) ||
+                            msg.match(/(?:my\s+)?([a-z0-9\s]+?)\s*(?:lecture|class|session|practical|lab)\s+(?:is\s+)?cancelled(?:\s+(today|tomorrow))?/i);
+  if (cancelSingleMatch) {
+    let subject = (cancelSingleMatch[1] || '').trim();
+    const isTomorrow = (cancelSingleMatch[2] || '').toLowerCase() === 'tomorrow' || /\btomorrow\b/i.test(msg);
+    const targetDate = isTomorrow ? tomorrowStr : todayStr;
+    const dayLabel = isTomorrow ? 'tomorrow' : 'today';
+
+    if (!subject || /^(practical|lab|class|lecture)$/i.test(subject)) {
+      const eff = availabilityService.getEffectiveTimetableForDate(targetDate, db);
+      const candidate = eff.classes.find(c =>
+        c.subject.toLowerCase().includes('lab') ||
+        c.subject.toLowerCase().includes('practical') ||
+        c.location
+      );
+      if (candidate) {
+        subject = candidate.subject;
+      } else if (eff.classes.length > 0) {
+        subject = eff.classes[0].subject;
+      } else {
+        subject = 'class';
+      }
+    }
+
+    availabilityService.cancelSingleClass(targetDate, subject, db);
+    return `Got it — cancelled "${subject}" for ${dayLabel} (${targetDate}). Your recurring weekly timetable remains preserved.`;
+  }
+
+  // 5. Extra lecture ("i have an extra lecture from 2 PM to 4 PM today")
+  const extraMatch = msg.match(/(?:extra|additional)\s+(?:lecture|class|session)\s+(?:on|for|in)?\s*([a-z0-9\s]+?)\s+(?:from\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*(?:-|to)\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i);
+  if (extraMatch) {
+    const subject = extraMatch[1].trim() || 'Extra Lecture';
+    const start = extraMatch[2].trim();
+    const end = extraMatch[3].trim();
+    const isTomorrow = /\btomorrow\b/i.test(msg);
+    const targetDate = isTomorrow ? tomorrowStr : todayStr;
+    const dayLabel = isTomorrow ? 'tomorrow' : 'today';
+    availabilityService.addExtraClass(targetDate, { subject, start_time: start, end_time: end }, db);
+    return `Got it — scheduled extra class "${subject}" from ${start} to ${end} for ${dayLabel} (${targetDate}).`;
+  }
+
+  // 6. Direct timetable text paste in chat ("Here is my timetable: Monday 10-11 OS...", or multi-slot schedule text)
+  if (/(?:timetable|weekly schedule|classes schedule)/i.test(msg) || ((msg.match(/(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Mon|Tue|Wed|Thu|Fri)/gi) || []).length >= 1 && (msg.match(/\d{1,2}[:.]\d{2}/g) || []).length >= 2)) {
+    try {
+      const { parseScheduleText, validateAndStructureTimetable } = require('./timetableExtractor');
+      const parsed = parseScheduleText(message);
+      if (parsed.rawEntries && parsed.rawEntries.length >= 2) {
+        const validated = validateAndStructureTimetable(parsed.rawEntries, parsed.uncertainEntries);
+        if (validated.entries.length >= 1) {
+          const result = {
+            success: true,
+            timetable_name: 'Pasted Weekly Schedule',
+            entries: validated.entries,
+            breaks: validated.breaks,
+            conflicts: validated.conflicts,
+            uncertain_entries: validated.uncertain_entries
+          };
+          const { setPendingState } = require('./chatCommands');
+          let previewMsg = `📅 I detected a weekly timetable from your message (${result.entries.length} classes):\n\n`;
+          const VALID_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+          const byDay = {};
+          for (const d of VALID_DAYS) byDay[d] = [];
+          for (const e of result.entries) {
+            if (byDay[e.day_of_week]) byDay[e.day_of_week].push(e);
+          }
+          for (const d of VALID_DAYS) {
+            if (byDay[d].length > 0) {
+              previewMsg += `**${d}**:\n`;
+              byDay[d].forEach(c => {
+                previewMsg += `• ${c.start_time}–${c.end_time}: ${c.title}${c.location ? ` (${c.location})` : ''}\n`;
+              });
+              previewMsg += `\n`;
+            }
+          }
+          previewMsg += `Reply **"yes"** or **"confirm"** to save this timetable, or specify corrections.`;
+          setPendingState({
+            type: 'timetable_preview',
+            extractionResult: result,
+            previewMessage: previewMsg,
+            expiresAt: Date.now() + 10 * 60 * 1000
+          });
+          return previewMsg;
+        }
+      }
+    } catch (_) {}
+  }
+
+  return null;
+}
+
+/**
  * Master Action Engine execution router
  * Returns a string reply if an action was handled, or null to fall through.
  */
@@ -1305,6 +1423,24 @@ function processNaturalLanguageAction(message, todayDateObj = new Date(), nowDat
   // 0.1 Show Day Plan ("show me today's plan", "what is my plan for today", "show tomorrow's plan")
   const showPlanReply = handleShowPlan(msg, todayDateObj);
   if (showPlanReply !== null) return showPlanReply;
+
+  // 0.15 Window Status Inquiry ("am i done for today", "is my day done", "what is my window")
+  if (/(?:am i done|is my day done|done for today\?|what is my window|check window)/i.test(msg)) {
+    const todayStr = getTodayDate(todayDateObj);
+    const row = db.prepare('SELECT * FROM daily_settings WHERE date = ?').get(todayStr);
+    if (row && row.done_for_day === 1) {
+      return `Yes, you are currently marked as **Done for today**. The scheduler will not allocate any more tasks today unless you reopen your window.`;
+    } else if (row && row.window_end_minutes !== null) {
+      const endTime = minutesToTimeString(row.window_end_minutes);
+      return `Your daily window is currently active until **${endTime}**. You can say "done for today" or "free till <time>" anytime to adjust it.`;
+    } else {
+      return `Your daily window is not set yet. Say "free till 9 PM" or "I have 3 hours" to set your available working time.`;
+    }
+  }
+
+  // 0.2 Phase 3: Timetable & Free Slots Actions
+  const timetableReply = handleTimetableActions(msg, todayDateObj);
+  if (timetableReply !== null) return timetableReply;
 
   // 1. Named Goal Step Completion ("Today i have completed bfs topic of tree")
   const namedStepReply = handleNamedStepCompletion(msg, todayDateObj);

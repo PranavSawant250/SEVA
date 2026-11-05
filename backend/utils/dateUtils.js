@@ -8,62 +8,84 @@
  * Rule: NEVER use toISOString() for dates. All functions use local Date methods.
  */
 
+const IST_TIMEZONE = 'Asia/Kolkata';
+
 /**
  * Returns today's date (or date for given Date object) formatted as YYYY-MM-DD
- * in local server timezone.
+ * in Asia/Kolkata timezone regardless of host machine timezone.
  * @param {Date} [dateObj=new Date()] Optional Date object
  * @returns {string} "YYYY-MM-DD"
  */
 function getTodayDate(dateObj = new Date()) {
   const d = dateObj instanceof Date ? dateObj : new Date(dateObj);
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: IST_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(d);
 }
 
 /**
- * Returns today's day of week name (e.g., "Monday") in local timezone.
+ * Returns day of week name (e.g. "Monday") for any YYYY-MM-DD string or Date object.
+ * @param {string|Date} [dateInput=new Date()]
+ * @returns {string} Full day name
+ */
+function getDayOfWeek(dateInput = new Date()) {
+  if (typeof dateInput === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateInput)) {
+    const [y, m, d] = dateInput.split('-').map(Number);
+    const dateObj = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    return days[dateObj.getUTCDay()];
+  }
+  return getTodayDayOfWeek(dateInput);
+}
+
+/**
+ * Returns today's day of week name (e.g., "Monday") in Asia/Kolkata timezone.
  * @param {Date} [dateObj=new Date()]
  * @returns {string} Full day name
  */
 function getTodayDayOfWeek(dateObj = new Date()) {
   const d = dateObj instanceof Date ? dateObj : new Date(dateObj);
-  return d.toLocaleDateString('en-US', { weekday: 'long' });
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: IST_TIMEZONE,
+    weekday: 'long'
+  }).format(d);
 }
 
 /**
- * Returns yesterday's date formatted as YYYY-MM-DD in local timezone.
+ * Returns yesterday's date formatted as YYYY-MM-DD in Asia/Kolkata timezone.
  * @param {Date} [dateObj=new Date()]
  * @returns {string} "YYYY-MM-DD"
  */
 function getYesterdayDate(dateObj = new Date()) {
-  const d = new Date(dateObj instanceof Date ? dateObj.getTime() : new Date(dateObj).getTime());
-  d.setDate(d.getDate() - 1);
+  const d = dateObj instanceof Date ? new Date(dateObj.getTime()) : new Date(dateObj);
+  d.setTime(d.getTime() - 24 * 60 * 60 * 1000);
   return getTodayDate(d);
 }
 
 /**
- * Returns tomorrow's date formatted as YYYY-MM-DD in local timezone.
+ * Returns tomorrow's date formatted as YYYY-MM-DD in Asia/Kolkata timezone.
  * @param {Date} [dateObj=new Date()]
  * @returns {string} "YYYY-MM-DD"
  */
 function getTomorrowDate(dateObj = new Date()) {
-  const d = new Date(dateObj instanceof Date ? dateObj.getTime() : new Date(dateObj).getTime());
-  d.setDate(d.getDate() + 1);
+  const d = dateObj instanceof Date ? new Date(dateObj.getTime()) : new Date(dateObj);
+  d.setTime(d.getTime() + 24 * 60 * 60 * 1000);
   return getTodayDate(d);
 }
 
 /**
- * Returns tomorrow's day of week name (e.g., "Tuesday") in local timezone.
+ * Returns tomorrow's day of week name (e.g., "Tuesday") in Asia/Kolkata timezone.
  * Used by the nightly check-in to build tomorrow's outline.
  * @param {Date} [dateObj=new Date()]
  * @returns {string} Full day name
  */
 function getTomorrowDayOfWeek(dateObj = new Date()) {
-  const d = new Date(dateObj instanceof Date ? dateObj.getTime() : new Date(dateObj).getTime());
-  d.setDate(d.getDate() + 1);
-  return d.toLocaleDateString('en-US', { weekday: 'long' });
+  const d = dateObj instanceof Date ? new Date(dateObj.getTime()) : new Date(dateObj);
+  d.setTime(d.getTime() + 24 * 60 * 60 * 1000);
+  return getTodayDayOfWeek(d);
 }
 
 /**
@@ -103,29 +125,33 @@ function minutesToTimeString(totalMinutes) {
 }
 
 /**
- * Returns the Monday of the week containing dateObj, as YYYY-MM-DD (local).
+ * Returns the Monday of the week containing dateObj, as YYYY-MM-DD in Asia/Kolkata.
  * Used by frequency goals to compute days_this_week.
  * @param {Date} [dateObj=new Date()]
  * @returns {string} "YYYY-MM-DD" of Monday in this week
  */
 function getWeekMondayDate(dateObj = new Date()) {
   const d = new Date(dateObj instanceof Date ? dateObj.getTime() : new Date(dateObj).getTime());
-  const dow = d.getDay(); // 0=Sun 1=Mon ... 6=Sat
+  const dowStr = new Intl.DateTimeFormat('en-US', { timeZone: IST_TIMEZONE, weekday: 'short' }).format(d);
+  const dowMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const dow = dowMap[dowStr] !== undefined ? dowMap[dowStr] : 1;
   const diff = dow === 0 ? -6 : 1 - dow;
-  d.setDate(d.getDate() + diff);
+  d.setTime(d.getTime() + diff * 24 * 60 * 60 * 1000);
   return getTodayDate(d);
 }
 
 /**
- * Returns the Sunday of the week containing dateObj, as YYYY-MM-DD (local).
+ * Returns the Sunday of the week containing dateObj, as YYYY-MM-DD in Asia/Kolkata.
  * @param {Date} [dateObj=new Date()]
  * @returns {string} "YYYY-MM-DD" of Sunday in this week
  */
 function getWeekSundayDate(dateObj = new Date()) {
   const d = new Date(dateObj instanceof Date ? dateObj.getTime() : new Date(dateObj).getTime());
-  const dow = d.getDay();
+  const dowStr = new Intl.DateTimeFormat('en-US', { timeZone: IST_TIMEZONE, weekday: 'short' }).format(d);
+  const dowMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const dow = dowMap[dowStr] !== undefined ? dowMap[dowStr] : 0;
   const diff = dow === 0 ? 0 : 7 - dow;
-  d.setDate(d.getDate() + diff);
+  d.setTime(d.getTime() + diff * 24 * 60 * 60 * 1000);
   return getTodayDate(d);
 }
 
@@ -166,7 +192,23 @@ function computeDaysSinceActivity(goalOrDates, todayDateStr) {
   return 0;
 }
 
+/**
+ * Adds an integer number of days to a "YYYY-MM-DD" date string in Asia/Kolkata.
+ * Positive numDays moves forward; negative moves backward.
+ * @param {string} dateStr "YYYY-MM-DD"
+ * @param {number} numDays Integer days to add
+ * @returns {string} "YYYY-MM-DD"
+ */
+function addDaysToDate(dateStr, numDays) {
+  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr;
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + Number(numDays || 0));
+  return getTodayDate(dt);
+}
+
 module.exports = {
+  getDayOfWeek,
   getTodayDate,
   getTodayDayOfWeek,
   getYesterdayDate,
@@ -177,5 +219,6 @@ module.exports = {
   getWeekMondayDate,
   getWeekSundayDate,
   daysBetween,
+  addDaysToDate,
   computeDaysSinceActivity
 };

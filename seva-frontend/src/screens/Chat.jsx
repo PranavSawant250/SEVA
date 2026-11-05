@@ -7,9 +7,13 @@ import {
   Sparkles, 
   AlertCircle, 
   RefreshCw, 
-  Clock 
+  Clock,
+  Paperclip,
+  Check,
+  X
 } from 'lucide-react';
 import client from '../api/client';
+import { emitDataMutated } from '../utils/syncEvents';
 import './Chat.css';
 
 export default function Chat() {
@@ -20,10 +24,13 @@ export default function Chat() {
   const [messages, setMessages] = useState([]);
   const [inputMsg, setInputMsg] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [pendingTimetable, setPendingTimetable] = useState(null);
   const [sendErrorId, setSendErrorId] = useState(null);
 
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   // Auto-scroll to bottom of conversation
   const scrollToBottom = () => {
@@ -89,6 +96,11 @@ export default function Chat() {
       });
       
       if (res.data.success && res.data.reply) {
+        // Emit mutation sync if the AI performed actions or updated state
+        if (res.data.actions?.length > 0 || res.data.updated?.length > 0) {
+          emitDataMutated(['tasks', 'plan', 'goals']);
+        }
+
         // Re-fetch chat history from server to get persistent DB row IDs
         const historyRes = await client.get('/chat/history');
         if (historyRes.data.success) {
@@ -152,6 +164,120 @@ export default function Chat() {
       e.preventDefault();
       handleSendMessage();
     }
+  };
+
+  // Timetable File Upload Handler
+  const handleFileUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const allowed = ['pdf', 'png', 'jpg', 'jpeg'];
+    const ext = file.name.split('.').pop()?.toLowerCase();
+    if (!allowed.includes(ext)) {
+      alert('Please upload a PDF document or an image (PNG, JPG, JPEG).');
+      return;
+    }
+
+    setIsUploading(true);
+    setIsSending(true);
+
+    const userUploadMsg = {
+      id: 'upload-' + Date.now(),
+      role: 'user',
+      message: `📎 Attached timetable: ${file.name} (${(file.size / 1024).toFixed(0)} KB)`,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
+    setMessages(prev => [...prev, userUploadMsg]);
+
+    try {
+      const formData = new FormData();
+      formData.append('timetable', file);
+
+      const res = await client.post('/timetable/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+
+      if (res.data.success) {
+        setPendingTimetable(res.data.extraction);
+        setMessages(prev => [
+          ...prev,
+          {
+            id: 'assistant-tt-' + Date.now(),
+            role: 'assistant',
+            message: res.data.preview_message,
+            timetableData: res.data.extraction,
+            provider: 'Local Timetable Parser',
+            badge: 'Local',
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          }
+        ]);
+      } else {
+        alert(res.data.error || 'Failed to extract timetable.');
+      }
+    } catch (err) {
+      console.error('[SEVA] Timetable upload error:', err);
+      const errMsg = err.response?.data?.error || err.message || 'Timetable extraction failed.';
+      setMessages(prev => [
+        ...prev,
+        {
+          id: 'assistant-err-' + Date.now(),
+          role: 'assistant',
+          message: `⚠️ Could not extract timetable from "${file.name}": ${errMsg}`,
+          provider: 'Error',
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        }
+      ]);
+    } finally {
+      setIsUploading(false);
+      setIsSending(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleConfirmTimetable = async () => {
+    try {
+      setIsSending(true);
+      const res = await client.post('/timetable/confirm', {
+        entries: pendingTimetable?.entries,
+        name: pendingTimetable?.timetable_name
+      });
+
+      if (res.data.success) {
+        setPendingTimetable(null);
+        setMessages(prev => [
+          ...prev,
+          {
+            id: 'assistant-confirmed-' + Date.now(),
+            role: 'assistant',
+            message: `✓ Timetable saved successfully (${res.data.count} recurring classes registered). Your Day Plan and availability will now automatically align with this weekly schedule.`,
+            provider: 'Local',
+            badge: 'Local',
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          }
+        ]);
+        emitDataMutated(['timetable', 'plan', 'Dashboard']);
+      }
+    } catch (err) {
+      console.error('[SEVA] Confirm timetable error:', err);
+      alert('Failed to save timetable.');
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  const handleDiscardTimetable = () => {
+    setPendingTimetable(null);
+    setMessages(prev => [
+      ...prev,
+      {
+        id: 'assistant-discard-' + Date.now(),
+        role: 'assistant',
+        message: 'Cancelled timetable import. Your existing schedule remains unchanged.',
+        provider: 'Local',
+        badge: 'Local',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      }
+    ]);
   };
 
   return (
@@ -310,6 +436,28 @@ export default function Chat() {
                         <AlertCircle size={12} /> Failed — Tap to retry
                       </span>
                     )}
+                    {((msg.timetableData && pendingTimetable) || (pendingTimetable && idx === messages.length - 1 && !isUser)) && (
+                      <div className="mt-3 pt-3 border-t border-muted/60 flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleConfirmTimetable}
+                          disabled={isSending}
+                          className="px-3.5 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-dark-bg font-semibold rounded-xl text-xs flex items-center gap-1.5 transition-all cursor-pointer shadow-md shadow-emerald-500/20 disabled:opacity-50"
+                        >
+                          <Check size={14} />
+                          <span>Confirm & Save Timetable</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleDiscardTimetable}
+                          disabled={isSending}
+                          className="px-3 py-1.5 bg-card-bg hover:bg-muted text-text-secondary hover:text-text-primary border border-muted rounded-xl text-xs flex items-center gap-1 transition-all cursor-pointer disabled:opacity-50"
+                        >
+                          <X size={14} />
+                          <span>Discard</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -341,13 +489,30 @@ export default function Chat() {
       {/* ── Fixed Bottom Input Bar ── */}
       <div className="pt-2 shrink-0">
         <div className="bg-panel border border-muted rounded-2xl p-2.5 sm:p-3 flex items-end gap-2.5 focus-within:border-accent/60 transition-all">
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isSending || isUploading}
+            className="p-3 bg-card-bg hover:bg-muted border border-muted text-text-secondary hover:text-accent rounded-xl transition-all cursor-pointer shrink-0 disabled:opacity-40"
+            title="Attach Timetable (PDF, PNG, JPG)"
+          >
+            <Paperclip size={18} className={isUploading ? 'animate-spin' : ''} />
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".pdf,.png,.jpg,.jpeg"
+            onChange={handleFileUpload}
+            className="hidden"
+          />
+
           <textarea
             ref={inputRef}
             rows={1}
             value={inputMsg}
             onChange={(e) => setInputMsg(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask SEVA about your schedule, deadlines, or tasks..."
+            placeholder="Ask SEVA or attach timetable (.pdf, .png, .jpg)..."
             disabled={isSending}
             className="flex-1 bg-transparent text-sm sm:text-base text-text-primary placeholder:text-text-secondary px-3 py-2 focus:outline-none resize-none max-h-28 min-h-[42px]"
           />

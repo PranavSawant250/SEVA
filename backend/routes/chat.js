@@ -73,10 +73,12 @@ router.post('/message', async (req, res) => {
     let badge = 'Local';
     let provider = 'Local (Command Router)';
     let updated = [];
+    let actions = [];
 
     if (commandReply !== null) {
       // Command handled — reply instantly, no AI call
       reply = commandReply;
+      updated = ['goals', 'tasks', 'plan'];
       console.log(`   └─ Command handled: "${reply.substring(0, 60)}${reply.length > 60 ? '...' : ''}"`);
     } else {
       // 3. Fall through to Gemini Tool-Calling Agent
@@ -98,21 +100,24 @@ router.post('/message', async (req, res) => {
       badge = agentRes.badge || 'Cloud';
       provider = agentRes.provider;
       updated = agentRes.updated || [];
+      actions = agentRes.actions || [];
       console.log(`   └─ Agent reply [${badge}]: "${reply.substring(0, 60)}${reply.length > 60 ? '...' : ''}"`);
     }
 
     // 4. Store reply in chat_history
+    const finalStoredReply = reply && String(reply).trim() ? String(reply).trim() : "I'm here to help. What would you like to plan or log?";
     db.prepare(
       `INSERT INTO chat_history (date, role, message) VALUES (?, 'assistant', ?)`
-    ).run(today, reply);
+    ).run(today, finalStoredReply);
 
     return res.json({
       success: true,
-      reply,
+      reply: finalStoredReply,
       badge,
       provider,
       session_id: sessionId,
       updated,
+      actions,
       handled_by: commandReply !== null ? 'command_router' : 'agent'
     });
   } catch (err) {

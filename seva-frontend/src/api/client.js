@@ -9,4 +9,19 @@ const client = axios.create({
   },
 });
 
+// Interceptor to handle unauthenticated (401) states safely
+client.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response && error.response.status === 401) {
+      localStorage.setItem('seva_logged_out', 'true');
+      sessionStorage.clear();
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login';
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
 export default client;

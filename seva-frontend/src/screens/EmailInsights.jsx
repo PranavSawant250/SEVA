@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import client from '../api/client';
 import { getPriorityBadgeClass } from '../utils/themeUtils';
+import { useDataSync, emitDataMutated } from '../utils/syncEvents';
 
 export default function EmailInsights() {
   const [loading, setLoading] = useState(true);
@@ -49,6 +50,10 @@ export default function EmailInsights() {
     }
   }, [filterMode]);
 
+  useDataSync(['emails'], () => {
+    fetchEmails(filterMode);
+  });
+
   useEffect(() => {
     fetchEmails(filterMode);
   }, [fetchEmails, filterMode]);
@@ -62,6 +67,7 @@ export default function EmailInsights() {
     try {
       await client.get('/emails/fetch');
       setSyncStatusMsg('Sync complete! Refreshing email insights...');
+      emitDataMutated(['emails', 'tasks', 'plan']);
       await fetchEmails(filterMode);
     } catch (err) {
       console.error('[SEVA] Email fetch/analyze error:', err);
@@ -79,6 +85,7 @@ export default function EmailInsights() {
       const res = await client.post(`/emails/accept/${id}`);
       if (res.data.success) {
         setEmails(prev => prev.map(e => e.id === id ? { ...e, accepted: 1 } : e));
+        emitDataMutated(['emails', 'tasks', 'plan']);
       } else {
         alert(res.data.message || res.data.error || 'Failed to accept email.');
       }
@@ -97,6 +104,7 @@ export default function EmailInsights() {
       const res = await client.post(`/emails/dismiss/${id}`);
       if (res.data.success) {
         setEmails(prev => prev.map(e => e.id === id ? { ...e, accepted: 2 } : e));
+        emitDataMutated(['emails']);
       } else {
         alert(res.data.error || 'Failed to dismiss email.');
       }
@@ -116,6 +124,7 @@ export default function EmailInsights() {
       const res = await client.delete(`/emails/${id}`);
       if (res.data.success) {
         setEmails(prev => prev.filter(e => e.id !== id));
+        emitDataMutated(['emails']);
       } else {
         alert(res.data.error || 'Failed to remove email.');
       }

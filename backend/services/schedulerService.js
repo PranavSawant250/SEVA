@@ -272,23 +272,31 @@ function buildFixedTimeline(timetableBlocks, fixedTasks) {
     if (s === null) continue;
     const e = ft.fixed_end ? parseTimeToMinutes(ft.fixed_end) : null;
     const dur = e !== null ? (e - s) : (ft.duration_min || 60);
-    items.push({ task: ft.name, startMinutes: s, duration: dur, source: ft.source || 'fixed', kind: 'task', priority: ft.priority || 'high', goal_id: ft.goal_id || null, task_id: ft.id || null });
+    items.push({ task: ft.name, startMinutes: s, duration: dur, source: ft.source === 'surprise_event' ? 'surprise_event' : 'fixed', kind: 'task', priority: ft.priority || 'high', goal_id: ft.goal_id || null, task_id: ft.id || null });
   }
   return items.sort((a, b) => a.startMinutes - b.startMinutes);
 }
 
-/** Fixed-vs-fixed overlaps: user conflicts. Both are kept; warn on each pair. */
+/** Fixed-vs-fixed overlaps: user conflicts. Both are kept; warn on each pair cleanly without duplicates. */
 function findFixedConflicts(fixedTimeline) {
   const warnings = [];
   const conflictsWith = new Map();
+  const reportedPairs = new Set();
+
   for (let i = 0; i < fixedTimeline.length; i++) {
     for (let j = i + 1; j < fixedTimeline.length; j++) {
       const a = fixedTimeline[i], b = fixedTimeline[j];
       if (!overlaps(a, b)) continue;
-      warnings.push(
-        `⚠️ "${b.task}" (${minutesToTimeString(b.startMinutes)}–${minutesToTimeString(endOf(b))}) conflicts with ` +
-        `"${a.task}" (${minutesToTimeString(a.startMinutes)}–${minutesToTimeString(endOf(a))}) — both kept; decide which to attend.`
-      );
+
+      const pairKey = `${Math.min(a.task_id || 0, b.task_id || 0)}:${Math.max(a.task_id || 0, b.task_id || 0)}:${a.task}:${b.task}`;
+      if (!reportedPairs.has(pairKey)) {
+        reportedPairs.add(pairKey);
+        warnings.push(
+          `⚠️ "${b.task}" (${minutesToTimeString(b.startMinutes)}–${minutesToTimeString(endOf(b))}) conflicts with ` +
+          `"${a.task}" (${minutesToTimeString(a.startMinutes)}–${minutesToTimeString(endOf(a))}) — both kept; decide which to attend.`
+        );
+      }
+
       if (!conflictsWith.has(a)) conflictsWith.set(a, []);
       if (!conflictsWith.has(b)) conflictsWith.set(b, []);
       conflictsWith.get(a).push(b.task);

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, Plus, AlertCircle, Clock, Tag } from 'lucide-react';
 import client from '../api/client';
+import { emitDataMutated } from '../utils/syncEvents';
 
 export default function AddTaskModal({ isOpen, onClose, onTaskAdded }) {
   const [name, setName] = useState('');
@@ -33,6 +34,7 @@ export default function AddTaskModal({ isOpen, onClose, onTaskAdded }) {
         setName('');
         setPriority('medium');
         setTimeSlot('');
+        emitDataMutated(['tasks', 'plan', 'goals']);
         onTaskAdded && onTaskAdded(res.data.task);
         onClose();
       } else {

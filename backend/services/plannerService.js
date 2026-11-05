@@ -8,6 +8,7 @@ const {
   daysBetween
 } = require('../utils/dateUtils');
 const { getAllGoals } = require('./goalsService');
+const availabilityService = require('./availabilityService');
 const {
   buildDaySchedule,
   buildFixedTimeline,
@@ -293,12 +294,9 @@ function gatherScheduleInputs(todayDateObj = new Date(), overrides = {}) {
     : (prefs.run_slot_start ? parseTimeToMinutes(prefs.run_slot_start) : null);
   const neglectDays = overrides.neglectDays ?? prefs.neglect_days ?? 3;
 
-  const timetableBlocks = overrides.timetableBlocks || db.prepare(`
-    SELECT day_of_week, subject, start_time, end_time
-    FROM timetable
-    WHERE day_of_week = ?
-    ORDER BY start_time ASC
-  `).all(todayDayOfWeek);
+  const timetableBlocks = overrides.timetableBlocks || (
+    availabilityService.getEffectiveTimetableForDate(today, db).classes
+  );
 
   // Read goals using the exact Step 2 getAllGoals() function
   const allGoals = overrides.allGoals || getAllGoals(dateObjForToday);
@@ -567,12 +565,7 @@ async function generateDayPlanAI(todayDateObj = new Date()) {
       id ASC
   `).all(today);
 
-  const timetable = db.prepare(`
-    SELECT day_of_week, subject, start_time, end_time
-    FROM timetable
-    WHERE day_of_week = ?
-    ORDER BY start_time ASC
-  `).all(todayDayOfWeek);
+  const timetable = availabilityService.getEffectiveTimetableForDate(today, db).classes;
 
   if (tasks.length === 0) {
     const emptyPlan = [];

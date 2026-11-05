@@ -2,32 +2,22 @@
  * backend/routes/goals.js
  *
  * REST endpoints for the Goals feature.
- * All logic is in goalsService.js — this file is routing + error handling only.
- *
- * Endpoints:
- *  POST  /api/goals/import            — bulk import from JSON
- *  GET   /api/goals                   — all goals with computed progress
- *  POST  /api/goals/:id/log           — log progress (count / frequency)
- *  PATCH /api/goals/:id/steps/:stepId — tick/untick a milestone step
- *  PATCH /api/goals/:id               — update title/priority/deadline/status/manual_progress
- *  DELETE /api/goals/:id              — soft remove (sets status='removed')
- *
- * Error shape: { success: false, error: "...", details?: [...] }
+ * Delegates all business logic, validation, and mutations to goalsService.js.
  */
 
 const express = require('express');
 const router = express.Router();
-const db = require('../database/db');
 const { getTodayDate } = require('../utils/dateUtils');
-const { importGoals, getAllGoals, getGoalReminders, computeGoalProgress } = require('../services/goalsService');
+const goalsService = require('../services/goalsService');
+const db = require('../database/db');
 
 // ─────────────────────────────────────────────────────────────
-// POST /api/goals/import
+// POST /api/goals/import — Bulk import from JSON
 // ─────────────────────────────────────────────────────────────
 router.post('/import', (req, res) => {
   try {
     const today = getTodayDate();
-    const result = importGoals(req.body, today);
+    const result = goalsService.importGoals(req.body, today);
     return res.status(200).json({ success: true, ...result });
   } catch (err) {
     if (err.statusCode) {
@@ -39,13 +29,11 @@ router.post('/import', (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// GET /api/goals/reminders
-// Deterministic in-app reminders sorted urgent -> warning -> info,
-// then high -> medium -> low, max 6.
+// GET /api/goals/reminders — In-app reminders (skips paused goals)
 // ─────────────────────────────────────────────────────────────
 router.get('/reminders', (req, res) => {
   try {
-    const reminders = getGoalReminders(new Date());
+    const reminders = goalsService.getGoalReminders(new Date());
     return res.json({
       success: true,
       count: reminders.length,
@@ -60,11 +48,12 @@ router.get('/reminders', (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// GET /api/goals
+// GET /api/goals — All goals with computed progress
+// Supports ?status=active|paused|completed|overdue|all, ?category=..., ?priority=...
 // ─────────────────────────────────────────────────────────────
 router.get('/', (req, res) => {
   try {
-    const goals = getAllGoals(new Date());
+    const goals = goalsService.getAllGoals(new Date(), req.query);
     return res.json({ success: true, count: goals.length, goals });
   } catch (err) {
     console.error('❌ GET /api/goals error:', err.message);
@@ -73,177 +62,181 @@ router.get('/', (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// POST /api/goals/:id/log
-// Body: { amount?: number, note?: string }
-// count goals: adds amount to current_count (capped at target_count)
-// frequency goals: records one entry for today (max one counted per day)
-// milestone / step-less: records a 'worked' log entry
+// GET /api/goals/:id — Goal details with steps & recent logs
 // ─────────────────────────────────────────────────────────────
-router.post('/:id/log', (req, res) => {
+router.get('/:id', (req, res) => {
   try {
     const goalId = parseInt(req.params.id, 10);
-    const goal = db.prepare('SELECT * FROM goals WHERE id = ?').get(goalId);
+    const goal = goalsService.getGoalById(goalId, new Date());
     if (!goal) return res.status(404).json({ success: false, error: 'Goal not found' });
-    if (goal.status === 'removed') return res.status(400).json({ success: false, error: 'Cannot log progress on a removed goal' });
-    if (goal.status === 'completed') return res.status(400).json({ success: false, error: 'Cannot log progress on a completed goal' });
-
-    const today = getTodayDate();
-    const amount = (typeof req.body.amount === 'number' && req.body.amount > 0) ? req.body.amount : 1;
-    const note = (req.body.note && typeof req.body.note === 'string') ? req.body.note.substring(0, 200) : null;
-
-    if (goal.goal_type === 'count') {
-      // Cap at target_count
-      const target = goal.target_count || Infinity;
-      const newCount = Math.min(goal.current_count + amount, target);
-      const delta = newCount - goal.current_count;
-      db.prepare('UPDATE goals SET current_count = ? WHERE id = ?').run(newCount, goalId);
-      db.prepare('INSERT INTO goal_progress_log (goal_id, date, amount, note) VALUES (?, ?, ?, ?)')
-        .run(goalId, today, delta, note);
-
-      // Auto-complete when count reaches target
-      if (target !== Infinity && newCount >= target) {
-        db.prepare("UPDATE goals SET status='completed', completed_date=? WHERE id=?").run(today, goalId);
-      }
-
-      return res.json({ success: true, current_count: newCount, logged: delta, capped: newCount < goal.current_count + amount });
-    }
-
-    if (goal.goal_type === 'frequency') {
-      // One count per day rule: check if already logged today with net positive activity
-      const existing = db.prepare(
-        'SELECT 1 FROM goal_progress_log WHERE goal_id = ? AND date = ? GROUP BY date HAVING SUM(amount) > 0'
-      ).get(goalId, today);
-      if (existing) {
-        return res.json({ success: true, message: 'Already logged for today — one session per day counts.', logged: 0 });
-      }
-      db.prepare('INSERT INTO goal_progress_log (goal_id, date, amount, note) VALUES (?, ?, 1, ?)').run(goalId, today, note);
-      return res.json({ success: true, logged: 1, date: today });
-    }
-
-    // Milestone (with or without steps): log 'worked' for step-less goals
-    db.prepare('INSERT INTO goal_progress_log (goal_id, date, amount, note) VALUES (?, ?, ?, ?)')
-      .run(goalId, today, 1, note || 'worked');
-    return res.json({ success: true, logged: 1, note: 'Session logged. Update steps or set manual progress to track completion.' });
+    return res.json({ success: true, goal });
   } catch (err) {
-    console.error('❌ POST /api/goals/:id/log error:', err.message);
-    return res.status(500).json({ success: false, error: 'Failed to log progress' });
+    console.error('❌ GET /api/goals/:id error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to fetch goal details' });
   }
 });
 
 // ─────────────────────────────────────────────────────────────
-// PATCH /api/goals/:id/steps/:stepId
-// Body: { done: 0 | 1 }
+// POST /api/goals — Create a single goal
+// ─────────────────────────────────────────────────────────────
+router.post('/', (req, res) => {
+  try {
+    const today = getTodayDate();
+    const created = goalsService.createGoal(req.body, today);
+    return res.status(201).json({ success: true, goal: created });
+  } catch (err) {
+    const status = err.statusCode || 500;
+    return res.status(status).json({ success: false, error: err.error || err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// POST /api/goals/:id/log — Log progress (count / frequency / practice)
+// ─────────────────────────────────────────────────────────────
+router.post('/:id/log', (req, res) => {
+  try {
+    const goalId = parseInt(req.params.id, 10);
+    const today = getTodayDate();
+    const result = goalsService.logGoalProgress(goalId, req.body, today);
+    return res.json({ success: true, ...result });
+  } catch (err) {
+    const status = err.statusCode || 500;
+    return res.status(status).json({ success: false, error: err.error || err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// POST /api/goals/:id/steps — Add step(s) to a milestone goal
+// ─────────────────────────────────────────────────────────────
+router.post('/:id/steps', (req, res) => {
+  try {
+    const goalId = parseInt(req.params.id, 10);
+    const result = goalsService.manageGoalSteps(goalId, 'add', req.body);
+    return res.status(201).json({ success: true, ...result });
+  } catch (err) {
+    const status = err.statusCode || 500;
+    return res.status(status).json({ success: false, error: err.error || err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// PATCH /api/goals/:id/steps/:stepId — Toggle step done/undone
 // ─────────────────────────────────────────────────────────────
 router.patch('/:id/steps/:stepId', (req, res) => {
   try {
     const goalId = parseInt(req.params.id, 10);
     const stepId = parseInt(req.params.stepId, 10);
     const done = req.body.done === 1 || req.body.done === true ? 1 : 0;
-
-    const step = db.prepare('SELECT * FROM goal_steps WHERE id = ? AND goal_id = ?').get(stepId, goalId);
-    if (!step) return res.status(404).json({ success: false, error: 'Step not found' });
-
-    db.prepare('UPDATE goal_steps SET done = ? WHERE id = ?').run(done, stepId);
-
-    // Auto-complete milestone goal if all steps done
-    const today = getTodayDate();
-    const steps = db.prepare('SELECT done FROM goal_steps WHERE goal_id = ?').all(goalId);
-    const allDone = steps.every(s => s.done === 1);
-    if (allDone && steps.length > 0) {
-      db.prepare("UPDATE goals SET status='completed', completed_date=? WHERE id=?").run(today, goalId);
-    }
-
-    return res.json({ success: true, step_id: stepId, done });
+    const result = goalsService.manageGoalSteps(goalId, 'toggle', { step_id: stepId, done });
+    return res.json({ success: true, ...result });
   } catch (err) {
-    console.error('❌ PATCH /api/goals/:id/steps/:stepId error:', err.message);
-    return res.status(500).json({ success: false, error: 'Failed to update step' });
+    const status = err.statusCode || 500;
+    return res.status(status).json({ success: false, error: err.error || err.message });
   }
 });
 
 // ─────────────────────────────────────────────────────────────
-// PATCH /api/goals/:id
-// Body: any subset of { title, priority, deadline, status, manual_progress }
-// Explicit null for manual_progress clears the override (checks key presence).
+// DELETE /api/goals/:id/steps/:stepId — Soft delete step
+// ─────────────────────────────────────────────────────────────
+router.delete('/:id/steps/:stepId', (req, res) => {
+  try {
+    const goalId = parseInt(req.params.id, 10);
+    const stepId = parseInt(req.params.stepId, 10);
+    const result = goalsService.manageGoalSteps(goalId, 'delete', { step_id: stepId });
+    return res.json({ success: true, ...result });
+  } catch (err) {
+    const status = err.statusCode || 500;
+    return res.status(status).json({ success: false, error: err.error || err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// PATCH /api/goals/:id — Update metadata, status, manual progress
 // ─────────────────────────────────────────────────────────────
 router.patch('/:id', (req, res) => {
   try {
     const goalId = parseInt(req.params.id, 10);
-    const goal = db.prepare('SELECT * FROM goals WHERE id = ?').get(goalId);
-    if (!goal) return res.status(404).json({ success: false, error: 'Goal not found' });
+    const today = getTodayDate();
 
-    const updates = {};
-    const ALLOWED_PRIORITIES = ['high', 'medium', 'low'];
-    const ALLOWED_STATUSES = ['active', 'completed', 'removed'];
+    // Check status transition
+    if (req.body.status) {
+      const s = String(req.body.status).toLowerCase().trim();
+      if (s === 'removed') {
+        const delRes = goalsService.deleteGoal(goalId, today);
+        return res.json({ success: true, ...delRes });
+      } else if (s === 'paused') {
+        const pauseRes = goalsService.updateGoalStatus(goalId, 'pause', {}, today);
+        return res.json({ success: true, ...pauseRes });
+      } else if (s === 'active') {
+        const currentGoal = db.prepare('SELECT status, is_paused FROM goals WHERE id = ?').get(goalId);
+        if (currentGoal && currentGoal.is_paused) {
+          const resRes = goalsService.updateGoalStatus(goalId, 'resume', req.body, today);
+          return res.json({ success: true, ...resRes });
+        } else if (currentGoal && currentGoal.status === 'completed') {
+          const reopenRes = goalsService.updateGoalStatus(goalId, 'reopen', {}, today);
+          return res.json({ success: true, ...reopenRes });
+        } else if (currentGoal && currentGoal.status === 'removed') {
+          const restoreRes = goalsService.updateGoalStatus(goalId, 'restore', {}, today);
+          return res.json({ success: true, ...restoreRes });
+        }
+      } else if (s === 'completed') {
+        const compRes = goalsService.updateGoalStatus(goalId, 'complete', {}, today);
+        return res.json({ success: true, ...compRes });
+      }
+    }
 
-    if ('title' in req.body) {
-      const t = (req.body.title || '').toString().trim();
-      if (!t || t.length > 200) return res.status(400).json({ success: false, error: 'title must be 1-200 chars' });
-      updates.title = t;
-    }
-    if ('priority' in req.body) {
-      const p = (req.body.priority || '').toLowerCase().trim();
-      if (!ALLOWED_PRIORITIES.includes(p)) return res.status(400).json({ success: false, error: 'priority must be high/medium/low' });
-      updates.priority = p;
-    }
-    if ('deadline' in req.body) {
-      const d = req.body.deadline;
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return res.status(400).json({ success: false, error: 'deadline must be YYYY-MM-DD' });
-      updates.deadline = d;
-    }
-    if ('status' in req.body) {
-      const s = (req.body.status || '').toLowerCase().trim();
-      if (!ALLOWED_STATUSES.includes(s)) return res.status(400).json({ success: false, error: 'status must be active/completed/removed' });
-      updates.status = s;
-      if (s === 'completed') updates.completed_date = getTodayDate();
-      if (s === 'active') updates.completed_date = null;
-    }
-    // Explicit null check: clear manual override; presence check not truthiness
+    // Manual progress override
     if ('manual_progress' in req.body) {
       if (req.body.manual_progress === null) {
-        updates.manual_progress = null;
+        db.prepare('UPDATE goals SET manual_progress = NULL WHERE id = ?').run(goalId);
       } else {
         const mp = parseInt(req.body.manual_progress, 10);
-        if (isNaN(mp) || mp < 0 || mp > 100) return res.status(400).json({ success: false, error: 'manual_progress must be 0-100 or null' });
-        updates.manual_progress = mp;
+        if (isNaN(mp) || mp < 0 || mp > 100) {
+          return res.status(400).json({ success: false, error: 'manual_progress must be 0-100 or null' });
+        }
+        db.prepare('UPDATE goals SET manual_progress = ? WHERE id = ?').run(mp, goalId);
         if (mp === 100) {
-          updates.status = 'completed';
-          updates.completed_date = getTodayDate();
+          goalsService.updateGoalStatus(goalId, 'complete', {}, today);
         }
       }
     }
 
-    if (Object.keys(updates).length === 0) return res.status(400).json({ success: false, error: 'No valid fields to update' });
+    // General metadata updates
+    const metaUpdates = {};
+    if ('title' in req.body) metaUpdates.title = req.body.title;
+    if ('category' in req.body) metaUpdates.category = req.body.category;
+    if ('priority' in req.body) metaUpdates.priority = req.body.priority;
+    if ('deadline' in req.body) metaUpdates.deadline = req.body.deadline;
+    if ('target' in req.body) metaUpdates.target = req.body.target;
+    if ('target_count' in req.body) metaUpdates.target_count = req.body.target_count;
+    if ('per_week' in req.body) metaUpdates.per_week = req.body.per_week;
 
-    const setClauses = Object.keys(updates).map(k => `${k} = ?`).join(', ');
-    db.prepare(`UPDATE goals SET ${setClauses} WHERE id = ?`).run(...Object.values(updates), goalId);
+    if (Object.keys(metaUpdates).length > 0) {
+      const updateRes = goalsService.updateGoal(goalId, metaUpdates);
+      return res.json({ success: true, ...updateRes });
+    }
 
-    return res.json({ success: true, updated: updates });
+    const current = goalsService.getGoalById(goalId, new Date());
+    return res.json({ success: true, goal: current });
   } catch (err) {
-    console.error('❌ PATCH /api/goals/:id error:', err.message);
-    return res.status(500).json({ success: false, error: 'Failed to update goal' });
+    const status = err.statusCode || 500;
+    return res.status(status).json({ success: false, error: err.error || err.message });
   }
 });
 
 // ─────────────────────────────────────────────────────────────
-// DELETE /api/goals/:id — soft remove (status = 'removed')
-// Deletes INCOMPLETE tasks dated today or later; keeps history.
+// DELETE /api/goals/:id — Soft remove (status='removed')
+// Atomically deletes incomplete future/today/backlog tasks & cleans day_plans.plan_json
 // ─────────────────────────────────────────────────────────────
 router.delete('/:id', (req, res) => {
   try {
     const goalId = parseInt(req.params.id, 10);
-    const goal = db.prepare('SELECT id, title FROM goals WHERE id = ?').get(goalId);
-    if (!goal) return res.status(404).json({ success: false, error: 'Goal not found' });
-
     const today = getTodayDate();
-    db.transaction(() => {
-      db.prepare("UPDATE goals SET status='removed' WHERE id=?").run(goalId);
-      db.prepare("DELETE FROM tasks WHERE goal_id=? AND completed=0 AND date>=?").run(goalId, today);
-    })();
-
-    return res.json({ success: true, message: `Goal "${goal.title}" removed. Completed tasks and history preserved.` });
+    const result = goalsService.deleteGoal(goalId, today);
+    return res.json({ success: true, ...result });
   } catch (err) {
-    console.error('❌ DELETE /api/goals/:id error:', err.message);
-    return res.status(500).json({ success: false, error: 'Failed to remove goal' });
+    const status = err.statusCode || 500;
+    return res.status(status).json({ success: false, error: err.error || err.message });
   }
 });
 

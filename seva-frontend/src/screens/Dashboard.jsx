@@ -1,13 +1,13 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { 
-  Mail, 
-  CheckSquare, 
-  Calendar, 
-  Plus, 
-  MessageSquare, 
-  Sparkles, 
-  Clock, 
+import {
+  Mail,
+  CheckSquare,
+  Calendar,
+  Plus,
+  MessageSquare,
+  Sparkles,
+  Clock,
   AlertCircle,
   RefreshCw,
   ArrowRight
@@ -15,6 +15,7 @@ import {
 import client from '../api/client';
 import AddTaskModal from '../components/AddTaskModal';
 import { getPriorityBadgeClass } from '../utils/themeUtils';
+import { useDataSync, emitDataMutated } from '../utils/syncEvents';
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -22,7 +23,7 @@ export default function Dashboard() {
   // Page States
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
-  
+
   // Data States
   const [emailCount, setEmailCount] = useState(0);
   const [latestEmailDate, setLatestEmailDate] = useState(null);
@@ -31,8 +32,6 @@ export default function Dashboard() {
   const [topPriorities, setTopPriorities] = useState([]);
   const [hasPlan, setHasPlan] = useState(false);
   const [reminders, setReminders] = useState([]);
-  const [windowState, setWindowState] = useState(null);
-  const [updatingWindow, setUpdatingWindow] = useState(false);
 
   // UI Action States
   const [generatingPlan, setGeneratingPlan] = useState(false);
@@ -41,11 +40,11 @@ export default function Dashboard() {
 
   // 1. Compute Greeting Client-Side Based on Hour
   const currentHour = new Date().getHours();
-  let greeting = 'Good morning';
+  let greeting = 'Good morning , Pranav';
   if (currentHour >= 12 && currentHour < 17) {
-    greeting = 'Good afternoon';
+    greeting = 'Good afternoon , Pranav';
   } else if (currentHour >= 17) {
-    greeting = 'Good evening';
+    greeting = 'Good evening , Pranav';
   }
 
   // Today's Formatted Date String
@@ -67,13 +66,12 @@ export default function Dashboard() {
         return;
       }
 
-      // 2. Fetch Emails, Tasks, Plan, Goal Reminders, and Today's Window in parallel
-      const [emailsRes, tasksRes, planRes, remRes, winRes] = await Promise.all([
+      // 2. Fetch Emails, Tasks, Plan, and Goal Reminders in parallel
+      const [emailsRes, tasksRes, planRes, remRes] = await Promise.all([
         client.get('/emails/today'),
         client.get('/tasks'),
         client.get('/plan/today'),
-        client.get('/goals/reminders').catch(() => ({ data: { reminders: [] } })),
-        client.get('/settings/today').catch(() => ({ data: null }))
+        client.get('/goals/reminders').catch(() => ({ data: { reminders: [] } }))
       ]);
 
       const emailList = emailsRes.data.emails || [];
@@ -90,7 +88,6 @@ export default function Dashboard() {
       setPendingTaskCount(pending);
 
       setReminders(remRes.data?.reminders || []);
-      setWindowState(winRes.data || null);
 
       if (planRes.data.success && Array.isArray(planRes.data.plan) && planRes.data.plan.length > 0) {
         setHasPlan(true);
@@ -128,22 +125,14 @@ export default function Dashboard() {
     }
   }, [navigate]);
 
+  // Global Cross-Screen Sync
+  useDataSync(['tasks', 'plan', 'goals', 'emails'], () => {
+    fetchDashboardData();
+  });
+
   useEffect(() => {
     fetchDashboardData();
   }, [fetchDashboardData]);
-
-  // Action: Update Today's Window
-  const handleQuickWindow = async (payload) => {
-    setUpdatingWindow(true);
-    try {
-      await client.put('/settings/today', payload);
-      await fetchDashboardData();
-    } catch (err) {
-      console.error('[SEVA] Window update failed:', err);
-    } finally {
-      setUpdatingWindow(false);
-    }
-  };
 
   // Action: Generate Day Plan
   const handleGeneratePlan = async () => {
@@ -156,6 +145,7 @@ export default function Dashboard() {
         res = await client.get('/plan/generate');
       }
       if (res.data.success) {
+        emitDataMutated(['plan']);
         await fetchDashboardData(); // Refresh top priorities and stats
         navigate('/dayplan');
       } else {
@@ -201,7 +191,7 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-8 max-w-6xl mx-auto pb-10">
-      
+
       {/* ── Greeting & Date Header ── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-muted pb-6">
         <div>
@@ -265,55 +255,6 @@ export default function Dashboard() {
         </button>
       </div>
 
-      {/* ── Today's Window Control ── */}
-      <div className="bg-card-bg border border-muted rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-accent/10 rounded-xl text-accent">
-            <Clock size={20} />
-          </div>
-          <div>
-            <div className="text-sm uppercase font-semibold text-text-secondary tracking-wider">Today's Window</div>
-            <div className="text-base font-semibold text-text-primary">
-              {windowState?.done_for_day
-                ? 'Done for today'
-                : windowState?.window_set
-                ? `Now until ${windowState.window_end_time} (${windowState.remaining_minutes ?? 0} min left)`
-                : 'Not set yet — set when your day ends to generate a schedule'}
-            </div>
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={() => handleQuickWindow({ window_end_time: '9:00 PM', done_for_day: false })}
-            disabled={updatingWindow}
-            className="px-3.5 py-1.5 text-sm font-medium bg-navy hover:bg-panelLight text-text-primary border border-muted rounded-lg cursor-pointer transition-all"
-          >
-            Free till 9 PM
-          </button>
-          <button
-            onClick={() => handleQuickWindow({ window_end_time: '11:00 PM', done_for_day: false })}
-            disabled={updatingWindow}
-            className="px-3.5 py-1.5 text-sm font-medium bg-navy hover:bg-panelLight text-text-primary border border-muted rounded-lg cursor-pointer transition-all"
-          >
-            Free till 11 PM
-          </button>
-          <button
-            onClick={() => handleQuickWindow({ available_minutes: 120, done_for_day: false })}
-            disabled={updatingWindow}
-            className="px-3.5 py-1.5 text-sm font-medium bg-navy hover:bg-panelLight text-text-primary border border-muted rounded-lg cursor-pointer transition-all"
-          >
-            +2h
-          </button>
-          <button
-            onClick={() => handleQuickWindow({ done_for_day: true })}
-            disabled={updatingWindow}
-            className="px-3.5 py-1.5 text-sm font-medium bg-red-500/15 hover:bg-red-500/25 text-red-300 border border-red-500/30 rounded-lg cursor-pointer transition-all"
-          >
-            Done for today
-          </button>
-        </div>
-      </div>
-
       {/* ── In-App Goal Reminders Banner (Hidden when empty) ── */}
       {reminders.length > 0 && (
         <div className="bg-card-bg border border-amber-500/30 rounded-2xl p-5 space-y-3">
@@ -337,23 +278,21 @@ export default function Dashboard() {
                 <div
                   key={rem.goal_id}
                   onClick={() => navigate('/goals')}
-                  className={`rounded-xl cursor-pointer transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${
-                    isUrgent
-                      ? 'p-3.5 bg-red-950/35 border border-red-500/40 hover:border-red-400'
-                      : isWarning
+                  className={`rounded-xl cursor-pointer transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${isUrgent
+                    ? 'p-3.5 bg-red-950/35 border border-red-500/40 hover:border-red-400'
+                    : isWarning
                       ? 'p-2.5 bg-amber-950/25 border border-amber-500/30 hover:border-amber-400'
                       : 'p-2.5 bg-dark-bg/70 border border-gray-800 hover:border-accent/40'
-                  }`}
+                    }`}
                 >
                   <div className="flex items-start sm:items-center gap-2.5 min-w-0">
                     <span
-                      className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full shrink-0 ${
-                        isUrgent
-                          ? 'bg-red-500/20 text-red-300 border border-red-500/40'
-                          : isWarning
+                      className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full shrink-0 ${isUrgent
+                        ? 'bg-red-500/20 text-red-300 border border-red-500/40'
+                        : isWarning
                           ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
                           : 'bg-accent/15 text-accent border border-accent/30'
-                      }`}
+                        }`}
                     >
                       {rem.level}
                     </span>
@@ -377,9 +316,9 @@ export default function Dashboard() {
 
       {/* ── Quick Stats Row (3 Cards) ── */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
-        
+
         {/* Card 1: Emails Today */}
-        <div 
+        <div
           onClick={() => navigate('/emails')}
           className="bg-card-bg border border-muted hover:border-accent/40 rounded-2xl p-5 space-y-3 transition-all cursor-pointer group"
         >
@@ -396,7 +335,7 @@ export default function Dashboard() {
         </div>
 
         {/* Card 2: Tasks Pending */}
-        <div 
+        <div
           onClick={() => navigate('/dayplan')}
           className="bg-card-bg border border-muted hover:border-accent/40 rounded-2xl p-5 space-y-3 transition-all cursor-pointer group"
         >
@@ -413,7 +352,7 @@ export default function Dashboard() {
         </div>
 
         {/* Card 3: Meetings & Commitments */}
-        <div 
+        <div
           onClick={() => navigate('/dayplan')}
           className="bg-card-bg border border-muted hover:border-accent/40 rounded-2xl p-5 space-y-3 transition-all cursor-pointer group"
         >
@@ -463,7 +402,7 @@ export default function Dashboard() {
         ) : (
           <div className="space-y-3">
             {topPriorities.map((item, index) => (
-              <div 
+              <div
                 key={index}
                 className="bg-navy border border-muted hover:border-gray-600 rounded-xl p-4 flex items-center justify-between gap-4 transition-all"
               >

@@ -45,12 +45,27 @@ export default function Login() {
       return;
     }
 
-    // Check existing timetable to decide between returning user & first time user
-    client.get('/timetable')
-      .then(res => {
-        if (res.data.count > 0) {
+    // Check both authentication status and existing timetable
+    Promise.all([
+      client.get('/auth/status').catch(() => ({ data: { authenticated: false } })),
+      client.get('/timetable').catch(() => ({ data: { count: 0 } }))
+    ])
+      .then(([authRes, ttRes]) => {
+        const isAuth = authRes.data?.authenticated;
+        const ttCount = ttRes.data?.count || 0;
+        const wasLoggedOut = localStorage.getItem('seva_logged_out') === 'true';
+
+        // If returning user with active setup and not explicitly logged out, go straight to Dashboard
+        if (ttCount > 0 && !wasLoggedOut) {
+          navigate('/dashboard', { replace: true });
+          return;
+        }
+
+        // If returning user (has timetable or active auth)
+        if (ttCount > 0 || isAuth) {
           setAppState('returning');
         } else {
+          // First time user only
           setAppState('first_time');
         }
       })
@@ -216,7 +231,10 @@ export default function Login() {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <button
-                onClick={() => navigate('/dashboard')}
+                onClick={() => {
+                  localStorage.removeItem('seva_logged_out');
+                  navigate('/dashboard');
+                }}
                 className="py-3.5 px-4 bg-accent hover:bg-accent/90 text-dark-bg font-heading font-semibold text-sm rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-accent/20"
               >
                 <span>Launch Dashboard</span>

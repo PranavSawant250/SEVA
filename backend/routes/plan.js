@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../database/db');
 const { generateDayPlan, replan } = require('../services/plannerService');
+const DayPlanService = require('../services/dayPlanService');
 const { getTodayDate } = require('../utils/dateUtils');
 
 function resolveNowDate(req) {
@@ -12,6 +13,36 @@ function resolveNowDate(req) {
   }
   return new Date();
 }
+
+// ─────────────────────────────────────────────────────────────
+// GET /api/plan
+// Supports ?date=YYYY-MM-DD (or defaults to today)
+// Returns reconciled plan without ad-hoc timeline injections.
+// ─────────────────────────────────────────────────────────────
+router.get('/', (req, res) => {
+  try {
+    const { date } = req.query;
+
+    if (date && date !== 'today' && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid date format. Expected YYYY-MM-DD.'
+      });
+    }
+
+    const nowDate = resolveNowDate(req);
+    const targetDate = date ? (date === 'today' ? getTodayDate(nowDate) : date) : getTodayDate(nowDate);
+    const result = DayPlanService.getPlanForDate(targetDate);
+    return res.json(result);
+  } catch (err) {
+    console.error('❌ Error in GET /api/plan:', err.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch plan',
+      details: err.message
+    });
+  }
+});
 
 // ─────────────────────────────────────────────────────────────
 // GET /api/plan/generate
@@ -61,13 +92,9 @@ router.get('/today', (req, res) => {
     const today = getTodayDate(nowDate);
     console.log(`📡 GET /api/plan/today — fetching saved plan for date: ${today}`);
 
-    const row = db.prepare(`
-      SELECT id, date, plan_json, generated_at, completed_count, missed_count
-      FROM day_plans
-      WHERE date = ?
-    `).get(today);
+    const result = DayPlanService.getPlanForDate(today);
 
-    if (!row) {
+    if (!result.exists) {
       console.log('   └─ No plan found for today.');
       return res.json({
         success: false,
@@ -76,35 +103,7 @@ router.get('/today', (req, res) => {
       });
     }
 
-    let plan;
-    try {
-      plan = JSON.parse(row.plan_json);
-    } catch (parseErr) {
-      console.error('❌ Failed to parse plan_json from day_plans:', parseErr.message);
-      return res.status(500).json({
-        success: false,
-        error: 'Stored plan is malformed',
-        details: parseErr.message
-      });
-    }
-
-    const findTaskStmt = db.prepare('SELECT id, completed FROM tasks WHERE id = ?');
-    for (const item of plan) {
-      if (item && item.task_id != null) {
-        const tRow = findTaskStmt.get(item.task_id);
-        if (tRow) item.completed = tRow.completed;
-      }
-    }
-
-    return res.json({
-      success: true,
-      date: row.date,
-      generated_at: row.generated_at,
-      completed_count: row.completed_count,
-      missed_count: row.missed_count,
-      count: plan.length,
-      plan
-    });
+    return res.json(result);
   } catch (err) {
     console.error('❌ Error in GET /api/plan/today:', err.message);
     return res.status(500).json({

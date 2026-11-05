@@ -5,6 +5,7 @@ const aiService = require('../services/aiService');
 const { classifyEmail, isActionableInvitation } = require('../services/emailClassifier');
 const db = require('../database/db');
 const { getTodayDate } = require('../utils/dateUtils');
+const TaskService = require('../services/taskService');
 
 
 // ─────────────────────────────────────────────────────────────
@@ -19,6 +20,69 @@ router.get('/gmail', (req, res) => {
   } catch (error) {
     console.error('Error generating Google Auth URL:', error);
     res.status(500).json({ error: 'Failed to initiate Google OAuth login', details: error.message });
+  }
+});
+
+// GET /api/auth/status & /api/auth/user - Return current authentication and user profile info
+router.get(['/status', '/user'], async (req, res) => {
+  try {
+    const loggedIn = gmailService.isLoggedIn();
+    let email = null;
+    const name = 'Pranav';
+
+    if (loggedIn) {
+      try {
+        const authClient = await gmailService.getAuthenticatedClient();
+        if (authClient) {
+          const { google } = require('googleapis');
+          const gmail = google.gmail({ version: 'v1', auth: authClient });
+          const profile = await gmail.users.getProfile({ userId: 'me' });
+          if (profile && profile.data && profile.data.emailAddress) {
+            email = profile.data.emailAddress;
+          }
+        }
+      } catch (err) {
+        // network or quota issue — still authenticated if token.json is valid on disk
+      }
+    }
+
+    return res.json({
+      success: true,
+      authenticated: loggedIn,
+      user: {
+        name,
+        email: email || (loggedIn ? 'pranav@seva.local' : null),
+        role: 'Student / Engineering',
+        avatar: null
+      }
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/auth/logout - Terminate session by unlinking token.json cleanly
+router.post('/logout', (req, res) => {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const tokenPath = path.join(__dirname, '..', 'credentials', 'token.json');
+
+    if (fs.existsSync(tokenPath)) {
+      fs.unlinkSync(tokenPath);
+      console.log('🚪 Session logged out: credentials/token.json deleted.');
+    }
+
+    return res.json({
+      success: true,
+      message: 'Logged out successfully. Authentication session cleared.'
+    });
+  } catch (err) {
+    console.error('Logout error:', err.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to terminate session'
+    });
   }
 });
 
@@ -329,32 +393,24 @@ router.post('/accept/:id', (req, res) => {
     // Mark email as accepted
     db.prepare(`UPDATE emails SET accepted = 1 WHERE id = ?`).run(emailId);
 
-    // Insert into tasks (source = 'email', not yet scheduled → time_slot = null)
-    const result = db.prepare(`
-      INSERT INTO tasks (name, priority, time_slot, source, completed, date, carry_forward)
-      VALUES (?, ?, NULL, 'email', 0, ?, 0)
-    `).run(taskName, priority, taskDate);
-
-    return result.lastInsertRowid;
+    // Insert into tasks via centralized TaskService
+    return TaskService.createTask({
+      name: taskName,
+      priority,
+      date: taskDate,
+      source: 'email'
+    });
   });
 
   try {
-    const newTaskId = acceptAndInsert();
+    const createdTask = acceptAndInsert();
 
-    console.log(`✅ Email ${emailId} accepted. New task id=${newTaskId} inserted in tasks table.`);
+    console.log(`✅ Email ${emailId} accepted. New task id=${createdTask.id} inserted in tasks table.`);
 
     res.json({
       success: true,
-      message: `Email accepted and added to tasks as id=${newTaskId}.`,
-      task: {
-        id: newTaskId,
-        name: taskName,
-        priority,
-        time_slot: null,
-        source: 'email',
-        completed: 0,
-        date: taskDate
-      }
+      message: `Email accepted and added to tasks as id=${createdTask.id}.`,
+      task: createdTask
     });
   } catch (err) {
     console.error(`❌ Failed to accept email ${emailId}:`, err.message);

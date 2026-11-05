@@ -22,6 +22,8 @@ const {
   minutesToTimeString
 } = require('../utils/dateUtils');
 const { getAllGoals } = require('./goalsService');
+const availabilityService = require('./availabilityService');
+const DayPlanService = require('./dayPlanService');
 const {
   buildDayOutline,
   buildGoalBlock
@@ -169,12 +171,7 @@ function computeTomorrowOutline(session, todayDateObj) {
   const bufferMinutes = prefs.buffer_minutes ?? 15;
   const defaultUrgentMins = prefs.default_urgent_minutes ?? 90;
 
-  const timetableBlocks = db.prepare(`
-    SELECT day_of_week, subject, start_time, end_time
-    FROM timetable
-    WHERE day_of_week = ?
-    ORDER BY start_time ASC
-  `).all(session.tomorrowWeekday);
+  const timetableBlocks = availabilityService.getEffectiveTimetableForDate(session.tomorrowDate, db).classes;
 
   // All goals as of today
   const allGoals = getAllGoals(todayDateObj).filter(g => g.status === 'active');
@@ -703,7 +700,10 @@ function commitTomorrowPlanTransaction(session) {
     // 3. Move accepted incomplete tasks from today or earlier to tomorrow (UPDATE date = tomorrow, no duplicate row!)
     for (const taskId of session.acceptedTaskIds) {
       const info = moveOldTaskStmt.run(tomorrow, taskId);
-      if (info.changes > 0) oldTasksMoved++;
+      if (info.changes > 0) {
+        oldTasksMoved++;
+        DayPlanService.removeTaskFromPlanTransaction(taskId, session.todayStr || session.todayDate, db);
+      }
     }
 
     // 4. Insert "also add" custom tasks for tomorrow (with duplicate check by case-insensitive name)

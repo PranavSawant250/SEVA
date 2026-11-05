@@ -56,6 +56,9 @@ db.exec(`
   );
 `);
 
+// Ensure test task 9 ("Review Database lecture notes") is dated 2026-11-01 in isolated temp DB for B.07
+db.prepare("UPDATE tasks SET date = '2026-11-01' WHERE id = 9").run();
+
 function getSnapshot(database) {
   const tables = ['goals', 'goal_steps', 'goal_progress_log', 'tasks', 'day_plans', 'daily_settings'];
   const snap = {};
@@ -584,6 +587,7 @@ async function runSuiteB() {
         nowDate: testDate,
         messageId: msgId,
         history: item.history || [],
+        preferredProvider: process.env.TEST_SUITE_PROVIDER || 'gemini',
         db
       });
 
@@ -658,9 +662,9 @@ async function runSuiteB() {
       status: isPass ? 'PASS' : 'FAIL'
     });
 
-    // Rate-limiting delay (2100ms) to stay within 30 RPM
+    // Rate-limiting delay (4100ms) to stay within 15 RPM free-tier ceiling
     if (i < CORPUS.length - 1) {
-      await sleep(2100);
+      await sleep(4100);
     }
   }
 

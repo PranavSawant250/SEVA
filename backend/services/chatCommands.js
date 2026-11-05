@@ -97,10 +97,12 @@ function isNo(text)  { return NO_WORDS.has(text.trim().toLowerCase()); }
 // ─────────────────────────────────────────────────────────────
 // 1. PENDING STATE HANDLER
 // ─────────────────────────────────────────────────────────────
-function handlePendingState(message, todayDate) {
+function handlePendingState(message, todayDate, dbOverride = null) {
   if (!pendingState) return null;
 
   const msg = message.trim();
+  const state = pendingState;
+  const activeDb = dbOverride || (state && state.db) || db;
 
   // Check if expired BEFORE clearing so we can deterministically reply on yes/no
   if (isPendingExpired()) {
@@ -112,12 +114,63 @@ function handlePendingState(message, todayDate) {
     return null;
   }
 
-  const state = pendingState;
+  if (state.type === 'timetable_preview') {
+    if (isYes(msg) || /^(confirm|save|looks good|accept|haan|yes save)$/i.test(msg)) {
+      const availabilityService = require('./availabilityService');
+      const saved = availabilityService.saveWeeklyTimetable(
+        state.extractionResult.entries,
+        state.extractionResult.timetable_name || 'Weekly Timetable',
+        activeDb
+      );
+      clearPending();
+      return `✓ Timetable confirmed and saved successfully (${saved.count} classes registered). Your Day Plan and availability will now automatically align with this weekly schedule.`;
+    } else if (isNo(msg) || /^(cancel|discard|no)$/i.test(msg)) {
+      clearPending();
+      return `OK, cancelled timetable import. Your existing schedule remains unchanged.`;
+    }
+  }
+
+  if (state.type === 'permanent_timetable_update') {
+    if (isYes(msg) || /^(confirm|save|permanently|haan|yes)$/i.test(msg)) {
+      try {
+        const activeWt = activeDb.prepare("SELECT id FROM weekly_timetable WHERE is_active = 1 ORDER BY id DESC LIMIT 1").get();
+        if (activeWt) {
+          activeDb.prepare(`
+            UPDATE timetable_entries
+            SET start_time = ?, end_time = ?
+            WHERE timetable_id = ? AND day_of_week = ? AND (title LIKE ? OR ? = 'class')
+          `).run(state.new_start, state.new_end, activeWt.id, state.day_of_week, `%${state.subject}%`, state.subject);
+        }
+        activeDb.prepare(`
+          UPDATE timetable
+          SET start_time = ?, end_time = ?
+          WHERE day_of_week = ? AND (subject LIKE ? OR ? = 'class')
+        `).run(state.new_start, state.new_end, state.day_of_week, `%${state.subject}%`, state.subject);
+      } catch (_) {}
+
+      clearPending();
+      return `✓ Permanently updated your recurring ${state.day_of_week} "${state.subject}" schedule to ${state.new_start}–${state.new_end}.`;
+    } else if (/^(today only|one day|temporary)$/i.test(msg)) {
+      const availabilityService = require('./availabilityService');
+      const targetDate = state.todayStr || getTodayDate(todayDate);
+      availabilityService.cancelSingleClass(targetDate, state.subject, activeDb);
+      availabilityService.addExtraClass(targetDate, {
+        subject: state.subject,
+        start_time: state.new_start,
+        end_time: state.new_end
+      }, activeDb);
+      clearPending();
+      return `✓ Applied as a one-day exception for ${targetDate} (${state.new_start}–${state.new_end}). Your recurring weekly timetable remains preserved.`;
+    } else if (isNo(msg) || /^(cancel|discard|no)$/i.test(msg)) {
+      clearPending();
+      return `OK, cancelled timetable update. Your weekly schedule remains unchanged.`;
+    }
+  }
 
   if (state.type === 'removal') {
     if (isYes(msg)) {
       // Execute the removal
-      const result = executeRemoval(state);
+      const result = executeRemoval(state, activeDb);
       clearPending();
       return result;
     } else if (isNo(msg)) {
@@ -149,34 +202,49 @@ function handlePendingState(message, todayDate) {
 // ─────────────────────────────────────────────────────────────
 // REMOVAL EXECUTION (called when user confirms)
 // ─────────────────────────────────────────────────────────────
-function executeRemoval(state) {
-  const todayStr = state.todayStr;
+function executeRemoval(state, dbOverride = null) {
+  const activeDb = dbOverride || db;
+  const todayStr = state.todayStr || getTodayDate();
 
   if (state.removalType === 'goal') {
     const targetIds = Array.isArray(state.targetIds) && state.targetIds.length > 0 ? state.targetIds : [state.targetId];
-    const updateGoalStmt = db.prepare("UPDATE goals SET status='removed' WHERE id = ?");
-    const delTaskStmt = db.prepare("DELETE FROM tasks WHERE goal_id = ? AND completed = 0 AND date >= ?");
-    const tx = db.transaction(() => {
-      for (const id of targetIds) {
-        updateGoalStmt.run(id);
-        delTaskStmt.run(id, todayStr);
-      }
-    });
-    tx();
-    return `✓ Goal(s) "${state.targetTitle}" removed. Completed tasks and progress history are preserved. You can restore from the Goals screen.`;
+    const { deleteGoal } = require('./goalsService');
+    for (const id of targetIds) {
+      try {
+        deleteGoal(id, todayStr, activeDb);
+      } catch (_) {}
+    }
+    return `✓ Goal(s) "${state.targetTitle}" removed. Completed tasks and progress history are preserved. You can restore from the Goals screen or say "restore <goal>".`;
   }
 
   if (state.removalType === 'task') {
-    if (Array.isArray(state.targetIds) && state.targetIds.length > 0) {
-      const delStmt = db.prepare('DELETE FROM tasks WHERE id = ? AND completed = 0');
-      const tx = db.transaction(() => {
-        for (const id of state.targetIds) delStmt.run(id);
-      });
-      tx();
-    } else {
-      db.prepare('DELETE FROM tasks WHERE id = ? AND completed = 0').run(state.targetId);
+    const TaskService = require('./taskService');
+    const targetIds = Array.isArray(state.targetIds) && state.targetIds.length > 0 ? state.targetIds : [state.targetId];
+    for (const id of targetIds) {
+      try {
+        TaskService.deleteTask(id, activeDb);
+      } catch (err) {
+        console.error(`Error deleting task ${id} in executeRemoval:`, err.message);
+      }
     }
     return `✓ Task "${state.targetTitle}" removed.`;
+  }
+
+  if (state.removalType === 'plan_item') {
+    const DayPlanService = require('./dayPlanService');
+    if (state.targetTaskId) {
+      DayPlanService.removeTaskFromPlanTransaction(state.targetTaskId, todayStr, activeDb);
+    } else if (state.targetTitle) {
+      const planRow = activeDb.prepare('SELECT id, plan_json FROM day_plans WHERE date = ?').get(todayStr);
+      if (planRow && planRow.plan_json) {
+        try {
+          const plan = JSON.parse(planRow.plan_json);
+          const filtered = plan.filter(i => (i.task || '').toLowerCase().trim() !== state.targetTitle.toLowerCase().trim());
+          activeDb.prepare('UPDATE day_plans SET plan_json = ? WHERE date = ?').run(JSON.stringify(filtered), todayStr);
+        } catch (_) {}
+      }
+    }
+    return `✓ "${state.targetTitle}" removed from today's plan.`;
   }
 
   return '⚠️ Could not execute removal — unknown type.';
@@ -255,6 +323,15 @@ function handleWindowCommands(message, todayDate, now) {
     return `✓ Marked as done for today. The scheduler won't add anything more.`;
   }
 
+  // "not done for today" / "reopen window" / "resume work"
+  if (/\b(?:not\s+done\s+for\s+today|reopen\s+(?:my\s+)?(?:window|day)|resume\s+work)\b/i.test(message)) {
+    db.prepare(`
+      INSERT INTO daily_settings (date, done_for_day) VALUES (?, 0)
+      ON CONFLICT(date) DO UPDATE SET done_for_day = 0
+    `).run(todayStr);
+    return `✓ Reopened your daily window. You can continue scheduling tasks.`;
+  }
+
   // "free till / until <time>"
   const mTill = message.match(RE_FREE_TILL);
   if (mTill) {
@@ -268,8 +345,8 @@ function handleWindowCommands(message, todayDate, now) {
       return `I couldn't parse that time ("${mTill[1]}"). Try something like "free till 9:00 PM".`;
     }
     db.prepare(`
-      INSERT INTO daily_settings (date, window_end_minutes) VALUES (?, ?)
-      ON CONFLICT(date) DO UPDATE SET window_end_minutes = ?
+      INSERT INTO daily_settings (date, window_end_minutes, done_for_day) VALUES (?, ?, 0)
+      ON CONFLICT(date) DO UPDATE SET window_end_minutes = ?, done_for_day = 0
     `).run(todayStr, endMins, endMins);
     return `✓ Window set: now until ${minutesToTimeString(endMins)} today.`;
   }
@@ -291,8 +368,8 @@ function handleWindowCommands(message, todayDate, now) {
     const nowMins = nowDate.getHours() * 60 + nowDate.getMinutes();
     const endMins = nowMins + budgetMins;
     db.prepare(`
-      INSERT INTO daily_settings (date, window_end_minutes, available_minutes) VALUES (?, ?, ?)
-      ON CONFLICT(date) DO UPDATE SET window_end_minutes = ?, available_minutes = ?
+      INSERT INTO daily_settings (date, window_end_minutes, available_minutes, done_for_day) VALUES (?, ?, ?, 0)
+      ON CONFLICT(date) DO UPDATE SET window_end_minutes = ?, available_minutes = ?, done_for_day = 0
     `).run(todayStr, endMins, budgetMins, endMins, budgetMins);
     return `✓ Window set: now until ${minutesToTimeString(endMins)} (${budgetMins} minutes from now).`;
   }
@@ -558,7 +635,7 @@ function handlePlanTomorrow(message, todayDate) {
 // todayDate is a Date object (injected for testability).
 // now is the current Date (injected for window calc); defaults to new Date().
 // ─────────────────────────────────────────────────────────────
-function routeCommand(message, todayDate, now) {
+function routeCommand(message, todayDate, now, dbOverride = null) {
   const nowDate = now || new Date();
   const todayDt = todayDate || new Date();
 
@@ -572,7 +649,7 @@ function routeCommand(message, todayDate, now) {
   if (planRemovalReply !== null) return planRemovalReply;
 
   // 2. Pending state (removal confirmation or check-in reply)
-  const pendingReply = handlePendingState(message, todayDt);
+  const pendingReply = handlePendingState(message, todayDt, dbOverride);
   if (pendingReply !== null) return pendingReply;
 
   // 3. Goal JSON import
@@ -617,5 +694,6 @@ module.exports = {
   isYes,
   isNo,
   getUserName,
-  namePrefix
+  namePrefix,
+  executeRemoval
 };

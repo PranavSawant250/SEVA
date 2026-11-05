@@ -24,7 +24,11 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "googleapis": "^144.0.0",
+    "groq-sdk": "^1.6.0",
+    "multer": "^2.5.0",
     "node-cron": "^3.0.3",
-    "ollama": "^0.5.14"
+    "ollama": "^0.5.14",
+    "pdf-parse": "^2.4.5",
+    "tesseract.js": "^7.0.0"
   }
 }
