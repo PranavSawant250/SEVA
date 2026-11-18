@@ -5,6 +5,8 @@ node_modules/
 .env
 *.env*
 
+*.study-notes
+
 # Credentials & OAuth Tokens
 credentials/
 *.json
